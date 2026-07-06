@@ -1,4 +1,4 @@
-import { AccountType, PaymentType, PermissionKey } from "@prisma/client";
+import { AccountType, PermissionKey } from "@prisma/client";
 import { Pencil, Plus } from "lucide-react";
 import {
   createPaymentCategory,
@@ -84,18 +84,12 @@ export default async function PaymentCategoriesPage({
       <div className="field-grid">
         <label>
           Kode
-          <select
+          <input
             defaultValue={item?.code}
-            disabled={Boolean(item)}
             name="code"
-          >
-            {Object.values(PaymentType).map((type) => (
-              <option key={type} value={type}>
-                {paymentTypeLabel(type)}
-              </option>
-            ))}
-          </select>
-          {item ? <input name="code" type="hidden" value={item.code} /> : null}
+            placeholder="SPP, UANG_PANGKAL, UTS"
+            required
+          />
         </label>
         <label>
           Nominal Default

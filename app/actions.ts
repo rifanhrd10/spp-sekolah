@@ -18,6 +18,14 @@ import { hashPassword, verifyPassword } from "@/lib/password";
 import { hasPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
+function toPaymentType(code: string): PaymentType {
+  const validTypes: PaymentType[] = ["SPP", "SUMBANGAN", "KEGIATAN", "SERAGAM", "LAINNYA"];
+  if (validTypes.includes(code as PaymentType)) {
+    return code as PaymentType;
+  }
+  return PaymentType.LAINNYA;
+}
+
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
@@ -30,7 +38,7 @@ const classRoomSchema = z.object({
 });
 
 const categorySchema = z.object({
-  code: z.nativeEnum(PaymentType),
+  code: z.string().min(1).max(50),
   name: z.string().min(3),
   defaultAmount: z.coerce.number().int().min(0),
   description: z.string().optional(),
@@ -378,25 +386,13 @@ export async function createPaymentCategory(formData: FormData) {
     AccountType.PENDAPATAN,
   );
 
-  const existing = await prisma.paymentCategory.findUnique({ where: { code: parsed.code } });
-  if (existing && !existing.deletedAt) {
-    redirectWithNotice(
-      "/master/jenis-pembayaran",
-      "Kode jenis pembayaran sudah digunakan.",
-      "error",
-    );
-  }
   const data = {
     ...parsed,
     revenueAccountId: parsed.revenueAccountId,
     active: true,
     deletedAt: null,
   };
-  if (existing) {
-    await prisma.paymentCategory.update({ where: { id: existing.id }, data });
-  } else {
-    await prisma.paymentCategory.create({ data });
-  }
+  await prisma.paymentCategory.create({ data });
 
   revalidatePath("/master/jenis-pembayaran");
   revalidatePath("/transaksi/tagihan");
@@ -537,7 +533,7 @@ export async function createInvoice(formData: FormData) {
   await prisma.invoice.create({
     data: {
       ...parsed,
-      type: category.code,
+      type: toPaymentType(category.code),
       status: InvoiceStatus.BELUM_BAYAR,
     },
   });
@@ -621,7 +617,7 @@ export async function createBulkInvoices(formData: FormData) {
         studentId: student.id,
         paymentCategoryId: category.id,
         billingBatchId: batch.id,
-        type: category.code,
+        type: toPaymentType(category.code),
         title: parsed.title,
         amount: parsed.amount,
         dueDate: parsed.dueDate,
@@ -1145,7 +1141,7 @@ export async function updateInvoice(formData: FormData) {
     );
   }
   await prisma.$transaction(async (tx) => {
-    await tx.invoice.update({ where: { id }, data: { ...parsed, type: category.code } });
+    await tx.invoice.update({ where: { id }, data: { ...parsed, type: toPaymentType(category.code) } });
     await recalculateInvoiceStatus(tx, id);
   });
   redirectWithNotice("/transaksi/tagihan", "Tagihan berhasil diubah.");

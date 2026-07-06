@@ -99,31 +99,31 @@ async function main() {
   const paymentCategories = await prisma.paymentCategory.createManyAndReturn({
     data: [
       {
-        code: PaymentType.SPP,
+        code: "SPP",
         name: "SPP Bulanan",
         defaultAmount: 250000,
         description: "Iuran wajib bulanan siswa",
       },
       {
-        code: PaymentType.SUMBANGAN,
+        code: "SUMBANGAN",
         name: "Sumbangan Sekolah",
         defaultAmount: 100000,
         description: "Sumbangan sarana dan prasarana",
       },
       {
-        code: PaymentType.KEGIATAN,
+        code: "KEGIATAN",
         name: "Kegiatan Siswa",
         defaultAmount: 175000,
         description: "Pembiayaan kegiatan sekolah",
       },
       {
-        code: PaymentType.SERAGAM,
+        code: "SERAGAM",
         name: "Seragam",
         defaultAmount: 180000,
         description: "Pembayaran kebutuhan seragam",
       },
       {
-        code: PaymentType.LAINNYA,
+        code: "LAINNYA",
         name: "Lain-lain",
         defaultAmount: 0,
         description: "Pembayaran non-rutin",
@@ -212,7 +212,7 @@ async function main() {
   const sppAlya = await prisma.invoice.create({
     data: {
       studentId: students[0].id,
-      paymentCategoryId: paymentCategoryByCode.get(PaymentType.SPP)?.id,
+      paymentCategoryId: paymentCategoryByCode.get("SPP")?.id,
       type: PaymentType.SPP,
       title: "SPP Juli 2026",
       amount: 250000,
@@ -227,7 +227,7 @@ async function main() {
   const sppBima = await prisma.invoice.create({
     data: {
       studentId: students[1].id,
-      paymentCategoryId: paymentCategoryByCode.get(PaymentType.SPP)?.id,
+      paymentCategoryId: paymentCategoryByCode.get("SPP")?.id,
       type: PaymentType.SPP,
       title: "SPP Juli 2026",
       amount: 250000,
@@ -243,7 +243,7 @@ async function main() {
     data: [
       {
         studentId: students[2].id,
-        paymentCategoryId: paymentCategoryByCode.get(PaymentType.KEGIATAN)?.id,
+        paymentCategoryId: paymentCategoryByCode.get("KEGIATAN")?.id,
         type: PaymentType.KEGIATAN,
         title: "Kegiatan Tengah Semester",
         amount: 175000,
@@ -255,7 +255,7 @@ async function main() {
       },
       {
         studentId: students[0].id,
-        paymentCategoryId: paymentCategoryByCode.get(PaymentType.SUMBANGAN)?.id,
+        paymentCategoryId: paymentCategoryByCode.get("SUMBANGAN")?.id,
         type: PaymentType.SUMBANGAN,
         title: "Sumbangan Sarana Kelas",
         amount: 100000,
@@ -266,7 +266,7 @@ async function main() {
       },
       {
         studentId: students[3].id,
-        paymentCategoryId: paymentCategoryByCode.get(PaymentType.SERAGAM)?.id,
+        paymentCategoryId: paymentCategoryByCode.get("SERAGAM")?.id,
         type: PaymentType.SERAGAM,
         title: "Seragam Olahraga",
         amount: 180000,
@@ -277,7 +277,7 @@ async function main() {
       },
       {
         studentId: students[4].id,
-        paymentCategoryId: paymentCategoryByCode.get(PaymentType.SPP)?.id,
+        paymentCategoryId: paymentCategoryByCode.get("SPP")?.id,
         type: PaymentType.SPP,
         title: "SPP Juli 2026",
         amount: 250000,

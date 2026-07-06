@@ -74,8 +74,12 @@ async function main() {
 
   const paymentCategories = await prisma.paymentCategory.findMany();
   for (const category of paymentCategories) {
+    const validTypes: PaymentType[] = ["SPP", "SUMBANGAN", "KEGIATAN", "SERAGAM", "LAINNYA"];
+    const type = validTypes.includes(category.code as PaymentType)
+      ? category.code as PaymentType
+      : PaymentType.LAINNYA;
     await prisma.invoice.updateMany({
-      where: { paymentCategoryId: null, type: category.code },
+      where: { paymentCategoryId: null, type },
       data: { paymentCategoryId: category.id },
     });
   }
