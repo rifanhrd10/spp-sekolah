@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: spp-sekolah-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: spp_user
+      POSTGRES_PASSWORD: spp_password
+      POSTGRES_DB: spp_sekolah
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
