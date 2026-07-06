@@ -1,6 +1,9 @@
 .next
 node_modules
 .env
+.env.local
+.env.production
 dist
 coverage
 *.log
+.deploy-guide
