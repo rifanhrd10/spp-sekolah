@@ -107,7 +107,7 @@ export default async function PaymentCategoriesPage({
       </label>
       <label>
         Akun Pendapatan
-        <select defaultValue={item?.revenueAccountId ?? ""} name="revenueAccountId" required>
+        <select defaultValue={item?.revenueAccountId || ""} name="revenueAccountId" required>
           <option value="">Pilih akun pendapatan</option>
           {revenueAccounts.map((account) => (
             <option key={account.id} value={account.id}>
