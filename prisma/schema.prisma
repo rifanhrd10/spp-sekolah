@@ -1,0 +1,368 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  BENDAHARA
+  KEPALA_SEKOLAH
+}
+
+enum PermissionKey {
+  DASHBOARD_VIEW
+  MASTER_STUDENT
+  MASTER_CLASS
+  MASTER_PAYMENT
+  MASTER_EXPENSE_CATEGORY
+  USER_MANAGE
+  ROLE_MANAGE
+  INVOICE_MANAGE
+  PAYMENT_MANAGE
+  EXPENSE_MANAGE
+  CASHBOOK_VIEW
+  CASHBOOK_MANAGE
+  ACCOUNTING_VIEW
+  ACCOUNTING_MANAGE
+  REPORT_VIEW
+  ANALYTICS_VIEW
+  RECEIPT_SETTING
+}
+
+enum CashType {
+  MASUK
+  KELUAR
+}
+
+enum AccountType {
+  ASET
+  KEWAJIBAN
+  MODAL
+  PENDAPATAN
+  BEBAN
+}
+
+enum PaymentType {
+  SPP
+  SUMBANGAN
+  KEGIATAN
+  SERAGAM
+  LAINNYA
+}
+
+enum InvoiceStatus {
+  BELUM_BAYAR
+  CICILAN
+  LUNAS
+}
+
+model User {
+  id           String    @id @default(uuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         UserRole  @default(BENDAHARA)
+  active       Boolean   @default(true)
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([deletedAt])
+}
+
+model RolePermission {
+  id         String        @id @default(uuid())
+  role       UserRole
+  permission PermissionKey
+  allowed    Boolean       @default(true)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  @@unique([role, permission])
+  @@index([role])
+}
+
+model ClassRoom {
+  id             String         @id @default(uuid())
+  name           String         @unique
+  level          String
+  homeroom       String?
+  students       Student[]
+  billingBatches BillingBatch[]
+  active         Boolean        @default(true)
+  deletedAt      DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([deletedAt])
+}
+
+model PaymentCategory {
+  id             String         @id @default(uuid())
+  code           PaymentType    @unique
+  name           String
+  defaultAmount  Int            @default(0)
+  description    String?
+  revenueAccountId String?
+  active         Boolean        @default(true)
+  deletedAt      DateTime?
+  revenueAccount Account?       @relation(fields: [revenueAccountId], references: [id], onDelete: SetNull)
+  invoices       Invoice[]
+  billingBatches BillingBatch[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([revenueAccountId])
+  @@index([deletedAt])
+}
+
+model Student {
+  id                String                @id @default(uuid())
+  nisn              String                @unique
+  name              String
+  classNameSnapshot String?
+  classRoomId       String?
+  gender            String?
+  finalScore        Float?
+  promotionStatus   String                @default("BELUM_DITENTUKAN")
+  guardianName      String
+  phone             String?
+  active            Boolean               @default(true)
+  deletedAt         DateTime?
+  classRoom         ClassRoom?            @relation(fields: [classRoomId], references: [id], onDelete: SetNull)
+  invoices          Invoice[]
+  classHistory      StudentClassHistory[]
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  @@index([classNameSnapshot])
+  @@index([classRoomId])
+  @@index([active])
+  @@index([gender])
+  @@index([promotionStatus])
+  @@index([deletedAt])
+}
+
+model StudentClassHistory {
+  id                    String   @id @default(uuid())
+  studentId             String
+  fromClassRoomId       String?
+  fromClassNameSnapshot String?
+  fromAcademicYear      String?
+  toClassRoomId         String?
+  toClassNameSnapshot   String?
+  toAcademicYear        String?
+  academicYear          String
+  movementType          String   @default("PROMOSI")
+  decisionStatus        String?
+  note                  String?
+  movedBy               String
+  movedAt               DateTime @default(now())
+  student               Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, movedAt])
+  @@index([academicYear])
+}
+
+model BillingBatch {
+  id                  String           @id @default(uuid())
+  title               String
+  paymentCategoryId   String?
+  classRoomId         String?
+  targetLabelSnapshot String?
+  amount              Int
+  dueDate             DateTime
+  academicYear        String
+  period              String
+  description         String?
+  createdBy           String
+  deletedAt           DateTime?
+  classRoom           ClassRoom?       @relation(fields: [classRoomId], references: [id], onDelete: SetNull)
+  paymentCategory     PaymentCategory? @relation(fields: [paymentCategoryId], references: [id], onDelete: SetNull)
+  invoices            Invoice[]
+  createdAt           DateTime         @default(now())
+
+  @@index([academicYear, period])
+  @@index([classRoomId])
+  @@index([deletedAt])
+}
+
+model Invoice {
+  id                String           @id @default(uuid())
+  studentId         String
+  paymentCategoryId String?
+  billingBatchId    String?
+  type              PaymentType
+  title             String
+  amount            Int
+  dueDate           DateTime
+  academicYear      String?
+  period            String?
+  status            InvoiceStatus    @default(BELUM_BAYAR)
+  description       String?
+  deletedAt         DateTime?
+  student           Student          @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  paymentCategory   PaymentCategory? @relation(fields: [paymentCategoryId], references: [id], onDelete: SetNull)
+  billingBatch      BillingBatch?    @relation(fields: [billingBatchId], references: [id], onDelete: SetNull)
+  payments          Payment[]
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([type])
+  @@index([status])
+  @@index([dueDate])
+  @@index([paymentCategoryId])
+  @@index([billingBatchId])
+  @@index([academicYear, period])
+  @@index([deletedAt])
+}
+
+model Payment {
+  id         String           @id @default(uuid())
+  receiptNo  String?          @unique
+  invoiceId  String
+  amount     Int
+  paidAt     DateTime         @default(now())
+  method     String           @default("Tunai")
+  note       String?
+  receivedBy String           @default("Bendahara")
+  deletedAt  DateTime?
+  invoice    Invoice          @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  cashEntry  CashTransaction?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  @@index([paidAt])
+  @@index([deletedAt])
+}
+
+model ExpenseCategory {
+  id               String    @id @default(uuid())
+  code             String    @unique
+  name             String    @unique
+  description      String?
+  expenseAccountId String?
+  active           Boolean   @default(true)
+  deletedAt        DateTime?
+  expenseAccount   Account?  @relation(fields: [expenseAccountId], references: [id], onDelete: SetNull)
+  expenses         Expense[]
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([deletedAt])
+}
+
+model Expense {
+  id                   String           @id @default(uuid())
+  categoryNameSnapshot String?
+  categoryId           String?
+  title                String
+  amount               Int
+  spentAt              DateTime         @default(now())
+  vendor               String?
+  note                 String?
+  createdBy            String           @default("Bendahara")
+  deletedAt            DateTime?
+  categoryRef          ExpenseCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  cashEntry            CashTransaction?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  @@index([categoryNameSnapshot])
+  @@index([categoryId])
+  @@index([spentAt])
+  @@index([deletedAt])
+}
+
+model CashTransaction {
+  id             String    @id @default(uuid())
+  type           CashType
+  date           DateTime  @default(now())
+  amount         Int
+  description    String
+  reference      String?
+  paymentId      String?   @unique
+  expenseId      String?   @unique
+  assetAccountId String?
+  contraAccountId String?
+  createdBy      String
+  deletedAt      DateTime?
+  payment        Payment?  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  expense        Expense?  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  assetAccount   Account?  @relation("CashAssetAccount", fields: [assetAccountId], references: [id], onDelete: SetNull)
+  contraAccount  Account?  @relation("CashContraAccount", fields: [contraAccountId], references: [id], onDelete: SetNull)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([date])
+  @@index([type])
+  @@index([assetAccountId])
+  @@index([contraAccountId])
+  @@index([deletedAt])
+}
+
+model Account {
+  id                String            @id @default(uuid())
+  code              String            @unique
+  name              String
+  type              AccountType
+  active            Boolean           @default(true)
+  deletedAt         DateTime?
+  lines             JournalLine[]
+  expenseCategories ExpenseCategory[]
+  paymentCategories PaymentCategory[]
+  cashAssetEntries  CashTransaction[] @relation("CashAssetAccount")
+  cashContraEntries CashTransaction[] @relation("CashContraAccount")
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@index([deletedAt])
+}
+
+model JournalEntry {
+  id          String        @id @default(uuid())
+  number      String        @unique
+  date        DateTime
+  description String
+  sourceType  String?
+  sourceId    String?
+  postedBy    String
+  deletedAt   DateTime?
+  lines       JournalLine[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([date])
+  @@index([sourceType, sourceId])
+  @@index([deletedAt])
+}
+
+model JournalLine {
+  id             String       @id @default(uuid())
+  journalEntryId String
+  accountId      String
+  debit          Int          @default(0)
+  credit         Int          @default(0)
+  journalEntry   JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  account        Account      @relation(fields: [accountId], references: [id])
+
+  @@index([journalEntryId])
+  @@index([accountId])
+}
+
+model ReceiptSetting {
+  id             String   @id @default("default")
+  schoolName     String   @default("SMP Nusantara")
+  schoolAddress  String   @default("Alamat sekolah belum diatur")
+  schoolPhone    String?
+  headerText     String?  @default("BUKTI PEMBAYARAN")
+  footerText     String?  @default("Simpan bukti pembayaran ini dengan baik.")
+  logoUrl        String?
+  signatureName  String?  @default("Bendahara")
+  signatureTitle String?  @default("Petugas Penerima")
+  updatedAt      DateTime @updatedAt
+}
