@@ -514,7 +514,7 @@ export async function createPaymentCategory(formData: FormData) {
     active: true,
     deletedAt: null,
   };
-  const existing = await prisma.paymentCategory.findUnique({ where: { code: parsed.code } });
+  const existing = await prisma.paymentCategory.findFirst({ where: { code: parsed.code } });
   if (existing && !existing.deletedAt) {
     redirectWithNotice(
       "/master/jenis-pembayaran",
