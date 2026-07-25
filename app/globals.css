@@ -3347,6 +3347,11 @@ tbody tr:hover {
   font-size: 12px;
 }
 
+.auth-footer-copy span {
+  display: block;
+  margin-top: 4px;
+}
+
 .login-panel {
   display: flex;
   align-items: center;
@@ -3479,6 +3484,8 @@ tbody tr:hover {
 }
 
 .auth-panel-footer {
+  display: grid;
+  gap: 4px;
   padding-top: 10px;
   border-top: 1px solid rgba(16, 43, 61, 0.08);
   color: var(--muted);

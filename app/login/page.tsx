@@ -29,7 +29,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Search
                 <GraduationCap size={42} />
               </div>
               <div className="auth-identity-office">
-                <strong>SMP NUSANTARA</strong>
+                <strong>SMP MUHAMMADIYAH PROGRAM KHUSUS TEMANGGUNG</strong>
                 <span>Sistem Informasi Keuangan Sekolah</span>
               </div>
               <div className="auth-identity-divider" />
@@ -43,7 +43,10 @@ export default async function LoginPage({ searchParams }: { searchParams: Search
               <span className="auth-kicker">Portal Keuangan Sekolah</span>
               <h2>Kelola tagihan, pembayaran, dan laporan dalam satu sistem terpadu.</h2>
               <p>Data rapi, proses cepat, dan informasi keuangan mudah dipantau oleh pihak sekolah.</p>
-              <small className="auth-footer-copy">&copy; 2026 SMP Muhammadiyah Program Khusus Temanggung</small>
+              <small className="auth-footer-copy">
+                &copy; 2026 SMP Muhammadiyah Program Khusus Temanggung
+                <span>Dibuat oleh Sora Software</span>
+              </small>
             </div>
           </div>
         </div>
@@ -91,7 +94,10 @@ export default async function LoginPage({ searchParams }: { searchParams: Search
               <span>Bendahara: bendahara@smp.local / bendahara123</span>
               <span>Kepala Sekolah: kepala@smp.local / kepala123</span>
             </details>
-            <div className="auth-panel-footer">&copy; 2026 SMP Muhammadiyah Program Khusus Temanggung</div>
+            <div className="auth-panel-footer">
+              <span>&copy; 2026 SMP Muhammadiyah Program Khusus Temanggung</span>
+              <span>Dibuat oleh Sora Software</span>
+            </div>
           </div>
         </section>
       </section>

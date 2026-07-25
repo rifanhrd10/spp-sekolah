@@ -390,6 +390,7 @@ export function AppShell({ children, expenseCategories, user, permissions }: App
         <footer className="sidebar-credit">
           <strong>SMP Muhammadiyah Program Khusus Temanggung</strong>
           <span>&copy; 2026 Sistem Keuangan Sekolah</span>
+          <span>Dibuat oleh Sora Software</span>
         </footer>
       </aside>
 
