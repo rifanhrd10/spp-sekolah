@@ -136,7 +136,7 @@ function Navigation({
   selectedCashType: string;
   selectedExpenseCategoryId: string;
 }) {
-  const [openMenus, setOpenMenus] = useState({ accounting: true, cashbook: true, expense: true });
+  const [openMenus, setOpenMenus] = useState({ accounting: false, cashbook: false, expense: false });
   const visibleGroups = navGroups
     .map((group) => ({
       ...group,
