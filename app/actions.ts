@@ -18,6 +18,14 @@ import { hashPassword, verifyPassword } from "@/lib/password";
 import { canAccessExpenseCategory, hasPermission, normalizeRoleCode } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
+function toPaymentType(code: string): PaymentType {
+  const validTypes: PaymentType[] = ["SPP", "SUMBANGAN", "KEGIATAN", "SERAGAM", "LAINNYA"];
+  if (validTypes.includes(code as PaymentType)) {
+    return code as PaymentType;
+  }
+  return PaymentType.LAINNYA;
+}
+
 const loginSchema = z.object({
   email: z.string().min(1),
   password: z.string().min(6),
@@ -30,7 +38,7 @@ const classRoomSchema = z.object({
 });
 
 const categorySchema = z.object({
-  code: z.nativeEnum(PaymentType),
+  code: z.string().min(1).max(50),
   name: z.string().min(3),
   defaultAmount: z.coerce.number().int().min(0),
   description: z.string().optional(),
@@ -496,27 +504,14 @@ export async function createPaymentCategory(formData: FormData) {
     AccountType.PENDAPATAN,
   );
 
-  const existing = await prisma.paymentCategory.findUnique({ where: { code: parsed.code } });
-  if (existing && !existing.deletedAt) {
-    redirectWithNotice(
-      "/master/jenis-pembayaran",
-      "Kode jenis pembayaran sudah digunakan.",
-      "error",
-    );
-  }
   const data = {
     ...parsed,
     revenueAccountId: parsed.revenueAccountId,
     active: true,
     deletedAt: null,
   };
-  let saved;
-  if (existing) {
-    saved = await prisma.paymentCategory.update({ where: { id: existing.id }, data });
-  } else {
-    saved = await prisma.paymentCategory.create({ data });
-  }
-  await logActivity(currentUser, existing ? "RESTORE" : "CREATE", "PaymentCategory", saved.id, existing, saved);
+  const saved = await prisma.paymentCategory.create({ data });
+  await logActivity(currentUser, "CREATE", "PaymentCategory", saved.id, null, saved);
 
   revalidatePath("/master/jenis-pembayaran");
   revalidatePath("/transaksi/tagihan");
@@ -663,7 +658,7 @@ export async function createInvoice(formData: FormData) {
   const saved = await prisma.invoice.create({
     data: {
       ...parsed,
-      type: category.code,
+      type: toPaymentType(category.code),
       status: InvoiceStatus.BELUM_BAYAR,
     },
   });
@@ -748,7 +743,7 @@ export async function createBulkInvoices(formData: FormData) {
         studentId: student.id,
         paymentCategoryId: category.id,
         billingBatchId: batch.id,
-        type: category.code,
+        type: toPaymentType(category.code),
         title: parsed.title,
         amount: parsed.amount,
         dueDate: parsed.dueDate,
@@ -1490,7 +1485,7 @@ export async function updateInvoice(formData: FormData) {
     );
   }
   const after = await prisma.$transaction(async (tx) => {
-    await tx.invoice.update({ where: { id }, data: { ...parsed, type: category.code } });
+    await tx.invoice.update({ where: { id }, data: { ...parsed, type: toPaymentType(category.code) } });
     await recalculateInvoiceStatus(tx, id);
     return tx.invoice.findUniqueOrThrow({ where: { id } });
   });
