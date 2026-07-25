@@ -7,12 +7,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum UserRole {
-  ADMIN
-  BENDAHARA
-  KEPALA_SEKOLAH
-}
-
 enum PermissionKey {
   DASHBOARD_VIEW
   MASTER_STUDENT
@@ -65,18 +59,33 @@ model User {
   name         String
   email        String    @unique
   passwordHash String
-  role         UserRole  @default(BENDAHARA)
+  role         String    @default("BENDAHARA")
   active       Boolean   @default(true)
   deletedAt    DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
+  @@index([role])
+  @@index([deletedAt])
+}
+
+model Role {
+  id          String    @id @default(uuid())
+  code        String    @unique
+  name        String
+  description String?
+  active      Boolean   @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([active])
   @@index([deletedAt])
 }
 
 model RolePermission {
   id         String        @id @default(uuid())
-  role       UserRole
+  role       String
   permission PermissionKey
   allowed    Boolean       @default(true)
   createdAt  DateTime      @default(now())
@@ -84,6 +93,39 @@ model RolePermission {
 
   @@unique([role, permission])
   @@index([role])
+}
+
+model RoleExpenseCategoryPermission {
+  id                String   @id @default(uuid())
+  role              String
+  expenseCategoryId String
+  allowed           Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([role, expenseCategoryId])
+  @@index([role])
+  @@index([expenseCategoryId])
+}
+
+model ActivityLog {
+  id        String   @id @default(uuid())
+  action    String
+  entity    String
+  entityId  String?
+  userId    String?
+  userName  String?
+  userEmail String?
+  userRole  String?
+  before    Json?
+  after     Json?
+  createdAt DateTime @default(now())
+
+  @@index([action])
+  @@index([entity])
+  @@index([entityId])
+  @@index([userId])
+  @@index([createdAt])
 }
 
 model ClassRoom {
@@ -102,19 +144,19 @@ model ClassRoom {
 }
 
 model PaymentCategory {
-  id             String         @id @default(uuid())
-  code           PaymentType    @unique
-  name           String
-  defaultAmount  Int            @default(0)
-  description    String?
+  id               String         @id @default(uuid())
+  code             PaymentType    @unique
+  name             String
+  defaultAmount    Int            @default(0)
+  description      String?
   revenueAccountId String?
-  active         Boolean        @default(true)
-  deletedAt      DateTime?
-  revenueAccount Account?       @relation(fields: [revenueAccountId], references: [id], onDelete: SetNull)
-  invoices       Invoice[]
-  billingBatches BillingBatch[]
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  active           Boolean        @default(true)
+  deletedAt        DateTime?
+  revenueAccount   Account?       @relation(fields: [revenueAccountId], references: [id], onDelete: SetNull)
+  invoices         Invoice[]
+  billingBatches   BillingBatch[]
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
 
   @@index([revenueAccountId])
   @@index([deletedAt])
@@ -223,7 +265,7 @@ model Invoice {
 
 model Payment {
   id         String           @id @default(uuid())
-  receiptNo  String?          @unique
+  receiptNo  String?
   invoiceId  String
   amount     Int
   paidAt     DateTime         @default(now())
@@ -236,6 +278,7 @@ model Payment {
   createdAt  DateTime         @default(now())
   updatedAt  DateTime         @updatedAt
 
+  @@index([receiptNo])
   @@index([paidAt])
   @@index([deletedAt])
 }
@@ -258,6 +301,7 @@ model ExpenseCategory {
 
 model Expense {
   id                   String           @id @default(uuid())
+  receiptNo            String?
   categoryNameSnapshot String?
   categoryId           String?
   title                String
@@ -272,6 +316,7 @@ model Expense {
   createdAt            DateTime         @default(now())
   updatedAt            DateTime         @updatedAt
 
+  @@index([receiptNo])
   @@index([categoryNameSnapshot])
   @@index([categoryId])
   @@index([spentAt])
@@ -279,24 +324,24 @@ model Expense {
 }
 
 model CashTransaction {
-  id             String    @id @default(uuid())
-  type           CashType
-  date           DateTime  @default(now())
-  amount         Int
-  description    String
-  reference      String?
-  paymentId      String?   @unique
-  expenseId      String?   @unique
-  assetAccountId String?
+  id              String    @id @default(uuid())
+  type            CashType
+  date            DateTime  @default(now())
+  amount          Int
+  description     String
+  reference       String?
+  paymentId       String?   @unique
+  expenseId       String?   @unique
+  assetAccountId  String?
   contraAccountId String?
-  createdBy      String
-  deletedAt      DateTime?
-  payment        Payment?  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
-  expense        Expense?  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
-  assetAccount   Account?  @relation("CashAssetAccount", fields: [assetAccountId], references: [id], onDelete: SetNull)
-  contraAccount  Account?  @relation("CashContraAccount", fields: [contraAccountId], references: [id], onDelete: SetNull)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdBy       String
+  deletedAt       DateTime?
+  payment         Payment?  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  expense         Expense?  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  assetAccount    Account?  @relation("CashAssetAccount", fields: [assetAccountId], references: [id], onDelete: SetNull)
+  contraAccount   Account?  @relation("CashContraAccount", fields: [contraAccountId], references: [id], onDelete: SetNull)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@index([date])
   @@index([type])

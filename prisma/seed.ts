@@ -4,10 +4,9 @@ import {
   PaymentType,
   PermissionKey,
   PrismaClient,
-  UserRole,
 } from "@prisma/client";
 import { hashPassword } from "../lib/password";
-import { defaultPermissions } from "../lib/permissions";
+import { defaultPermissions, defaultRoles } from "../lib/permissions";
 
 const prisma = new PrismaClient();
 
@@ -25,14 +24,18 @@ async function main() {
   await prisma.paymentCategory.deleteMany();
   await prisma.classRoom.deleteMany();
   await prisma.user.deleteMany();
+  await prisma.roleExpenseCategoryPermission.deleteMany();
   await prisma.rolePermission.deleteMany();
+  await prisma.role.deleteMany();
   await prisma.account.deleteMany();
   await prisma.receiptSetting.deleteMany();
+
+  await prisma.role.createMany({ data: defaultRoles });
 
   await prisma.rolePermission.createMany({
     data: Object.entries(defaultPermissions).flatMap(([role, permissions]) =>
       permissions.map((permission) => ({
-        role: role as UserRole,
+        role,
         permission: permission as PermissionKey,
         allowed: true,
       })),
@@ -63,22 +66,28 @@ async function main() {
   await prisma.user.createMany({
     data: [
       {
+        name: "Superadmin",
+        email: "superadmin",
+        passwordHash: hashPassword("password"),
+        role: "SUPERADMIN",
+      },
+      {
         name: "Administrator",
         email: "admin@smp.local",
         passwordHash: hashPassword("admin123"),
-        role: UserRole.ADMIN,
+        role: "ADMIN",
       },
       {
         name: "Ibu Maya",
         email: "bendahara@smp.local",
         passwordHash: hashPassword("bendahara123"),
-        role: UserRole.BENDAHARA,
+        role: "BENDAHARA",
       },
       {
         name: "Pak Arman",
         email: "kepala@smp.local",
         passwordHash: hashPassword("kepala123"),
-        role: UserRole.KEPALA_SEKOLAH,
+        role: "KEPALA_SEKOLAH",
       },
     ],
   });
@@ -155,6 +164,15 @@ async function main() {
     ],
   });
   const expenseCategoryByCode = new Map(expenseCategories.map((category) => [category.code, category]));
+  await prisma.roleExpenseCategoryPermission.createMany({
+    data: defaultRoles.flatMap((role) =>
+      expenseCategories.map((category) => ({
+        role: role.code,
+        expenseCategoryId: category.id,
+        allowed: true,
+      })),
+    ),
+  });
 
   const students = await Promise.all([
     prisma.student.create({

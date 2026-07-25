@@ -147,6 +147,11 @@ fieldset:disabled {
   gap: 4px;
 }
 
+.nav-item-wrap {
+  display: grid;
+  gap: 3px;
+}
+
 .nav-section.section-start {
   margin-top: 4px;
   padding-top: 11px;
@@ -161,7 +166,8 @@ fieldset:disabled {
   text-transform: uppercase;
 }
 
-.nav-list a {
+.nav-list a,
+.nav-dropdown-toggle {
   width: 100%;
   min-height: 40px;
   display: flex;
@@ -171,25 +177,75 @@ fieldset:disabled {
   border: 1px solid transparent;
   border-radius: 8px;
   color: rgba(255, 255, 255, 0.78);
+  background: transparent;
   font-size: 13px;
   font-weight: 700;
+  font-family: inherit;
   text-decoration: none;
+  cursor: pointer;
   transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
 }
 
 .nav-list a:hover,
-.nav-list a.active {
+.nav-list a.active,
+.nav-dropdown-toggle:hover,
+.nav-dropdown-toggle.active {
   border-color: rgba(254, 196, 47, 0.42);
   color: #fff;
   background: rgba(255, 255, 255, 0.11);
 }
 
-.nav-list a.active {
+.nav-list a.active,
+.nav-dropdown-toggle.active {
   box-shadow: inset 3px 0 var(--gold);
 }
 
-.nav-list a svg {
+.nav-list a svg,
+.nav-dropdown-toggle svg {
   flex: 0 0 auto;
+}
+
+.nav-dropdown-toggle span {
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+}
+
+.nav-dropdown-toggle svg:last-child {
+  margin-left: auto;
+  transition: transform 0.16s ease;
+}
+
+.nav-dropdown-toggle svg.rotate {
+  transform: rotate(180deg);
+}
+
+.nav-submenu {
+  display: grid;
+  gap: 3px;
+  padding-left: 30px;
+}
+
+.nav-submenu a {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 7px;
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.nav-submenu a::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.nav-submenu a.active::before {
+  background: var(--gold);
 }
 
 .sidebar-credit {
@@ -231,12 +287,16 @@ fieldset:disabled {
 
 .sidebar-collapsed .brand-copy,
 .sidebar-collapsed .nav-section-title,
+.sidebar-collapsed .nav-submenu,
 .sidebar-collapsed .nav-list a span,
+.sidebar-collapsed .nav-dropdown-toggle span,
+.sidebar-collapsed .nav-dropdown-toggle svg:last-child,
 .sidebar-collapsed .sidebar-credit {
   display: none;
 }
 
-.sidebar-collapsed .nav-list a {
+.sidebar-collapsed .nav-list a,
+.sidebar-collapsed .nav-dropdown-toggle {
   justify-content: center;
   padding: 0;
 }
@@ -528,8 +588,8 @@ fieldset:disabled {
 }
 
 .page-title-copy .table-search-input {
-  width: min(42vw, 390px);
-  min-width: 300px;
+  width: min(34vw, 320px);
+  min-width: 260px;
 }
 
 .table-toolbar-controls .table-search {
@@ -554,8 +614,17 @@ fieldset:disabled {
 }
 
 .table-toolbar-controls .table-search-input {
-  width: min(42vw, 390px);
-  min-width: 300px;
+  width: min(34vw, 320px);
+  min-width: 260px;
+}
+
+.transaction-toolbar-controls {
+  align-items: center;
+  gap: 10px;
+}
+
+.transaction-toolbar-controls .date-range-filter {
+  flex: 0 0 auto;
 }
 
 .page-title h2 {
@@ -1089,6 +1158,20 @@ textarea,
   transition: border-color 0.16s ease, box-shadow 0.16s ease;
 }
 
+.readonly-field {
+  width: 100%;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid #cbd5d1;
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  background: #f6fafb;
+}
+
 textarea,
 .textarea {
   min-height: 94px;
@@ -1344,6 +1427,17 @@ td,
   vertical-align: top;
 }
 
+tfoot td,
+.table tfoot td {
+  padding: 13px 10px;
+  border-top: 2px solid var(--line);
+  border-bottom: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  background: #f7fafb;
+}
+
 tbody tr:hover {
   background: #f7fbfc;
 }
@@ -1418,7 +1512,7 @@ tbody tr:hover {
 }
 
 .app-modal-xl {
-  max-width: 1180px;
+  max-width: min(1400px, calc(100vw - 72px));
 }
 
 .app-modal::backdrop {
@@ -1566,6 +1660,7 @@ tbody tr:hover {
 }
 
 .money-input {
+  width: 100%;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
@@ -1684,6 +1779,56 @@ tbody tr:hover {
   font-size: 15px;
 }
 
+.batch-lines {
+  display: grid;
+  gap: 12px;
+}
+
+.batch-line {
+  display: grid;
+  gap: 12px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.batch-line.selected {
+  border-color: #9bc8b4;
+  background: #f5fbf7;
+}
+
+.batch-line-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.checkbox-row input {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  accent-color: var(--green);
+}
+
+.checkbox-row span,
+.checkbox-row small {
+  display: block;
+}
+
+.checkbox-row small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .invoice-selection-summary {
   display: flex;
   align-items: center;
@@ -1694,6 +1839,11 @@ tbody tr:hover {
   color: var(--muted);
   font-size: 12px;
   background: #f6fafb;
+}
+
+.invoice-selection-summary.compact {
+  align-self: end;
+  min-height: 42px;
 }
 
 .invoice-selection-summary strong {
@@ -1901,6 +2051,53 @@ tbody tr:hover {
 
 .role-permission-list .form-stack {
   padding: 14px;
+}
+
+.role-management-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfdfe;
+}
+
+.role-management-card .form-stack {
+  padding: 0;
+}
+
+.permission-group-title {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.empty-inline {
+  margin: 0;
+  padding: 12px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  background: #fbfdfe;
+}
+
+.activity-json {
+  max-width: 360px;
+  max-height: 180px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  background: #f8fbfc;
 }
 
 .permission-checkbox-grid {
@@ -2419,11 +2616,11 @@ tbody tr:hover {
 }
 
 .date-range-filter {
-  min-height: 58px;
+  min-height: 44px;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 12px;
+  padding: 5px 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
@@ -2447,13 +2644,13 @@ tbody tr:hover {
 }
 
 .date-range-filter input {
-  width: 150px;
-  min-height: 38px;
+  width: 135px;
+  min-height: 34px;
   padding: 0 10px;
 }
 
 .date-filter-submit {
-  min-height: 38px;
+  min-height: 34px;
 }
 
 .callout > span {
@@ -2469,6 +2666,66 @@ tbody tr:hover {
   color: var(--muted);
   font-size: 12px;
   text-align: center;
+}
+
+.empty-state-panel {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  padding: 36px;
+  color: var(--text);
+  text-align: center;
+}
+
+.empty-state-panel h2 {
+  margin: 0 0 6px;
+  color: var(--navy);
+  font-size: 22px;
+}
+
+.empty-state-panel p {
+  max-width: 660px;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.empty-state-icon {
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  border-radius: 18px;
+  color: var(--navy);
+  background: #eef6fa;
+}
+
+.category-link-grid {
+  width: min(760px, 100%);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.category-link-card {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--navy);
+  font-size: 13px;
+  font-weight: 800;
+  text-align: left;
+  text-decoration: none;
+  background: #fff;
+}
+
+.category-link-card:hover {
+  border-color: #b8ced6;
+  background: #f8fbfc;
 }
 
 /* Workbook sheets */
@@ -3359,6 +3616,8 @@ tbody tr:hover {
   .sidebar-collapsed .brand-copy,
   .sidebar-collapsed .nav-section-title,
   .sidebar-collapsed .nav-list a span,
+  .sidebar-collapsed .nav-dropdown-toggle span,
+  .sidebar-collapsed .nav-dropdown-toggle svg:last-child,
   .sidebar-collapsed .sidebar-credit {
     display: grid;
   }
@@ -3367,7 +3626,8 @@ tbody tr:hover {
     display: block;
   }
 
-  .sidebar-collapsed .nav-list a {
+  .sidebar-collapsed .nav-list a,
+  .sidebar-collapsed .nav-dropdown-toggle {
     justify-content: flex-start;
     padding: 0 12px;
   }

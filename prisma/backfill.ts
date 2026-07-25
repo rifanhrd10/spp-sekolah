@@ -1,12 +1,26 @@
-import { PaymentType, PrismaClient, UserRole } from "@prisma/client";
+import { PaymentType, PrismaClient } from "@prisma/client";
 import { postExpenseAccounting, postPaymentAccounting } from "../lib/accounting";
-import { defaultPermissions } from "../lib/permissions";
+import { hashPassword } from "../lib/password";
+import { defaultPermissions, defaultRoles } from "../lib/permissions";
 
 const prisma = new PrismaClient();
 
 async function main() {
-  for (const role of Object.values(UserRole)) {
-    for (const permission of defaultPermissions[role]) {
+  for (const role of defaultRoles) {
+    await prisma.role.upsert({
+      where: { code: role.code },
+      create: role,
+      update: {
+        name: role.name,
+        description: role.description,
+        active: true,
+        deletedAt: null,
+      },
+    });
+  }
+
+  for (const role of defaultRoles.map((item) => item.code)) {
+    for (const permission of defaultPermissions[role] ?? []) {
       await prisma.rolePermission.upsert({
         where: { role_permission: { role, permission } },
         create: { role, permission, allowed: true },
@@ -14,6 +28,24 @@ async function main() {
       });
     }
   }
+
+  await prisma.user.upsert({
+    where: { email: "superadmin" },
+    create: {
+      name: "Superadmin",
+      email: "superadmin",
+      passwordHash: hashPassword("password"),
+      role: "SUPERADMIN",
+      active: true,
+    },
+    update: {
+      name: "Superadmin",
+      passwordHash: hashPassword("password"),
+      role: "SUPERADMIN",
+      active: true,
+      deletedAt: null,
+    },
+  });
 
   const accounts = await prisma.account.findMany();
   const operationalAccount = accounts.find((account) => account.code === "5101");
@@ -70,6 +102,20 @@ async function main() {
       where: { categoryId: null },
       data: { categoryId: fallbackCategory.id },
     });
+  }
+
+  const expenseCategories = await prisma.expenseCategory.findMany({
+    where: { active: true, deletedAt: null },
+    select: { id: true },
+  });
+  for (const role of defaultRoles.map((item) => item.code)) {
+    for (const category of expenseCategories) {
+      await prisma.roleExpenseCategoryPermission.upsert({
+        where: { role_expenseCategoryId: { role, expenseCategoryId: category.id } },
+        create: { role, expenseCategoryId: category.id, allowed: true },
+        update: {},
+      });
+    }
   }
 
   const paymentCategories = await prisma.paymentCategory.findMany();

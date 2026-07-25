@@ -3,11 +3,13 @@ import {
   Banknote,
   CircleAlert,
   CircleCheckBig,
+  Download,
   ReceiptText,
   TrendingDown,
   TrendingUp,
   Users,
 } from "lucide-react";
+import Link from "next/link";
 import { requirePermission } from "@/lib/auth";
 import { paidTotal, remainingTotal } from "@/lib/finance";
 import { currency, paymentTypeLabel } from "@/lib/format";
@@ -73,6 +75,17 @@ export default async function AnalyticsPage() {
 
   return (
     <main className="page analytics-page">
+      <section className="page-title">
+        <div>
+          <h2>Analisis Keuangan</h2>
+          <p>Ringkasan performa penagihan, pengeluaran, dan realisasi pembayaran.</p>
+        </div>
+        <div className="page-actions">
+          <Link className="btn btn-secondary" href="/analisa/export">
+            <Download size={17} /> Export Excel
+          </Link>
+        </div>
+      </section>
       <section className="analytics-summary">
         <div className="analysis-metric primary">
           <span><ReceiptText size={18} /> Total Tagihan</span>

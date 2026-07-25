@@ -5,10 +5,12 @@ import {
   BookOpen,
   BookOpenCheck,
   Calculator,
+  ChevronDown,
   ClipboardList,
   Cog,
   FolderTree,
   GraduationCap,
+  History,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -25,7 +27,7 @@ import {
 } from "lucide-react";
 import { PermissionKey } from "@prisma/client";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { logoutAction } from "@/app/actions";
 import { LiveClock } from "@/components/live-clock";
@@ -36,15 +38,18 @@ type AppShellProps = {
     name: string;
     email: string;
     role: string;
+    roleName?: string;
   };
   permissions: PermissionKey[];
+  expenseCategories: { id: string; name: string }[];
 };
 
 type NavItem = {
   href: string;
   label: string;
   icon: LucideIcon;
-  permission: PermissionKey;
+  permission?: PermissionKey;
+  superadminOnly?: boolean;
 };
 
 type NavGroup = {
@@ -99,37 +104,43 @@ const navGroups: NavGroup[] = [
     items: [
       { href: "/master/pengguna", label: "Pengguna & Akses", icon: BookOpenCheck, permission: PermissionKey.USER_MANAGE },
       { href: "/pengaturan/kwitansi", label: "Pengaturan Kwitansi", icon: Cog, permission: PermissionKey.RECEIPT_SETTING },
+      { href: "/pengaturan/log-activity", label: "Log Activity", icon: History, superadminOnly: true },
     ],
   },
 ];
-
-function roleText(role: string) {
-  const labels: Record<string, string> = {
-    ADMIN: "Administrator",
-    BENDAHARA: "Bendahara",
-    KEPALA_SEKOLAH: "Kepala Sekolah",
-  };
-
-  return labels[role] ?? role;
-}
 
 function isActivePath(pathname: string, href: string) {
   return pathname === href || (href !== "/dashboard" && pathname.startsWith(`${href}/`));
 }
 
 function Navigation({
+  expenseCategories,
+  isSuperadminUser,
   permissions,
   pathname,
   onNavigate,
+  selectedAccountingExpenseCategoryId,
+  selectedAccountingSource,
+  selectedCashExpenseCategoryId,
+  selectedCashType,
+  selectedExpenseCategoryId,
 }: {
+  expenseCategories: { id: string; name: string }[];
+  isSuperadminUser: boolean;
   permissions: PermissionKey[];
   pathname: string;
   onNavigate: () => void;
+  selectedAccountingExpenseCategoryId: string;
+  selectedAccountingSource: string;
+  selectedCashExpenseCategoryId: string;
+  selectedCashType: string;
+  selectedExpenseCategoryId: string;
 }) {
+  const [openMenus, setOpenMenus] = useState({ accounting: true, cashbook: true, expense: true });
   const visibleGroups = navGroups
     .map((group) => ({
       ...group,
-      items: group.items.filter((item) => permissions.includes(item.permission)),
+      items: group.items.filter((item) => item.superadminOnly ? isSuperadminUser : item.permission ? permissions.includes(item.permission) : true),
     }))
     .filter((group) => group.items.length);
 
@@ -141,18 +152,174 @@ function Navigation({
           {group.items.map((item) => {
             const Icon = item.icon;
             const active = isActivePath(pathname, item.href);
+            const showExpenseSubmenu = item.href === "/transaksi/pengeluaran"
+              && permissions.includes(PermissionKey.EXPENSE_MANAGE)
+              && expenseCategories.length > 0;
+            const showCashbookSubmenu = item.href === "/buku-kas"
+              && permissions.includes(PermissionKey.CASHBOOK_VIEW)
+              && expenseCategories.length > 0;
+            const showAccountingSubmenu = item.href === "/akuntansi"
+              && permissions.includes(PermissionKey.ACCOUNTING_VIEW)
+              && expenseCategories.length > 0;
+            const expenseSubmenuOpen = showExpenseSubmenu && (openMenus.expense || active);
+            const cashbookSubmenuOpen = showCashbookSubmenu && (openMenus.cashbook || active);
+            const accountingSubmenuOpen = showAccountingSubmenu && (openMenus.accounting || active);
             return (
-              <Link
-                aria-current={active ? "page" : undefined}
-                className={active ? "active" : ""}
-                href={item.href}
-                key={item.href}
-                onClick={onNavigate}
-                title={item.label}
-              >
-                <Icon size={19} />
-                <span>{item.label}</span>
-              </Link>
+              <div className="nav-item-wrap" key={item.href}>
+                {showExpenseSubmenu ? (
+                  <button
+                    aria-expanded={expenseSubmenuOpen}
+                    className={`nav-dropdown-toggle ${active ? "active" : ""}`}
+                    onClick={() => setOpenMenus((current) => ({ ...current, expense: !current.expense }))}
+                    title={item.label}
+                    type="button"
+                  >
+                    <Icon size={19} />
+                    <span>{item.label}</span>
+                    <ChevronDown className={expenseSubmenuOpen ? "rotate" : ""} size={15} />
+                  </button>
+                ) : showCashbookSubmenu ? (
+                  <button
+                    aria-expanded={cashbookSubmenuOpen}
+                    className={`nav-dropdown-toggle ${active ? "active" : ""}`}
+                    onClick={() => setOpenMenus((current) => ({ ...current, cashbook: !current.cashbook }))}
+                    title={item.label}
+                    type="button"
+                  >
+                    <Icon size={19} />
+                    <span>{item.label}</span>
+                    <ChevronDown className={cashbookSubmenuOpen ? "rotate" : ""} size={15} />
+                  </button>
+                ) : showAccountingSubmenu ? (
+                  <button
+                    aria-expanded={accountingSubmenuOpen}
+                    className={`nav-dropdown-toggle ${active ? "active" : ""}`}
+                    onClick={() => setOpenMenus((current) => ({ ...current, accounting: !current.accounting }))}
+                    title={item.label}
+                    type="button"
+                  >
+                    <Icon size={19} />
+                    <span>{item.label}</span>
+                    <ChevronDown className={accountingSubmenuOpen ? "rotate" : ""} size={15} />
+                  </button>
+                ) : (
+                  <Link
+                    aria-current={active && !selectedExpenseCategoryId ? "page" : undefined}
+                    className={active && !selectedExpenseCategoryId ? "active" : ""}
+                    href={item.href}
+                    onClick={onNavigate}
+                    title={item.label}
+                  >
+                    <Icon size={19} />
+                    <span>{item.label}</span>
+                  </Link>
+                )}
+                {expenseSubmenuOpen ? (
+                  <div className="nav-submenu">
+                    {expenseCategories.map((category) => {
+                      const href = `/transaksi/pengeluaran?categoryId=${encodeURIComponent(category.id)}`;
+                      const categoryActive = active && selectedExpenseCategoryId === category.id;
+                      return (
+                        <Link
+                          aria-current={categoryActive ? "page" : undefined}
+                          className={categoryActive ? "active" : ""}
+                          href={href}
+                          key={category.id}
+                          onClick={onNavigate}
+                          title={category.name}
+                        >
+                          <span>{category.name}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {cashbookSubmenuOpen ? (
+                  <div className="nav-submenu">
+                    <Link
+                      aria-current={active && !selectedCashType && !selectedCashExpenseCategoryId ? "page" : undefined}
+                      className={active && !selectedCashType && !selectedCashExpenseCategoryId ? "active" : ""}
+                      href="/buku-kas"
+                      onClick={onNavigate}
+                      title="Semua Buku Kas"
+                    >
+                      <span>Semua Buku Kas</span>
+                    </Link>
+                    <Link
+                      aria-current={active && selectedCashType === "MASUK" ? "page" : undefined}
+                      className={active && selectedCashType === "MASUK" ? "active" : ""}
+                      href="/buku-kas?type=MASUK"
+                      onClick={onNavigate}
+                      title="Kas Masuk"
+                    >
+                      <span>Kas Masuk</span>
+                    </Link>
+                    {expenseCategories.map((category) => {
+                      const href = `/buku-kas?type=KELUAR&expenseCategoryId=${encodeURIComponent(category.id)}`;
+                      const categoryActive = active && selectedCashExpenseCategoryId === category.id;
+                      return (
+                        <Link
+                          aria-current={categoryActive ? "page" : undefined}
+                          className={categoryActive ? "active" : ""}
+                          href={href}
+                          key={category.id}
+                          onClick={onNavigate}
+                          title={`Pengeluaran ${category.name}`}
+                        >
+                          <span>{category.name}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {accountingSubmenuOpen ? (
+                  <div className="nav-submenu">
+                    <Link
+                      aria-current={active && !selectedAccountingSource && !selectedAccountingExpenseCategoryId ? "page" : undefined}
+                      className={active && !selectedAccountingSource && !selectedAccountingExpenseCategoryId ? "active" : ""}
+                      href="/akuntansi"
+                      onClick={onNavigate}
+                      title="Semua Akuntansi"
+                    >
+                      <span>Semua Akuntansi</span>
+                    </Link>
+                    <Link
+                      aria-current={active && selectedAccountingSource === "PAYMENT" ? "page" : undefined}
+                      className={active && selectedAccountingSource === "PAYMENT" ? "active" : ""}
+                      href="/akuntansi?source=PAYMENT"
+                      onClick={onNavigate}
+                      title="Pembayaran"
+                    >
+                      <span>Pembayaran</span>
+                    </Link>
+                    <Link
+                      aria-current={active && selectedAccountingSource === "CASH" ? "page" : undefined}
+                      className={active && selectedAccountingSource === "CASH" ? "active" : ""}
+                      href="/akuntansi?source=CASH"
+                      onClick={onNavigate}
+                      title="Buku Kas Manual"
+                    >
+                      <span>Buku Kas Manual</span>
+                    </Link>
+                    {expenseCategories.map((category) => {
+                      const href = `/akuntansi?source=EXPENSE&expenseCategoryId=${encodeURIComponent(category.id)}`;
+                      const categoryActive = active && selectedAccountingExpenseCategoryId === category.id;
+                      return (
+                        <Link
+                          aria-current={categoryActive ? "page" : undefined}
+                          className={categoryActive ? "active" : ""}
+                          href={href}
+                          key={category.id}
+                          onClick={onNavigate}
+                          title={`Pengeluaran ${category.name}`}
+                        >
+                          <span>{category.name}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
             );
           })}
         </div>
@@ -161,10 +328,16 @@ function Navigation({
   );
 }
 
-export function AppShell({ children, user, permissions }: AppShellProps) {
+export function AppShell({ children, expenseCategories, user, permissions }: AppShellProps) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const selectedExpenseCategoryId = searchParams.get("categoryId") ?? "";
+  const selectedAccountingExpenseCategoryId = searchParams.get("expenseCategoryId") ?? "";
+  const selectedAccountingSource = searchParams.get("source") ?? "";
+  const selectedCashExpenseCategoryId = searchParams.get("expenseCategoryId") ?? "";
+  const selectedCashType = searchParams.get("type") ?? "";
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -201,7 +374,18 @@ export function AppShell({ children, user, permissions }: AppShellProps) {
           </button>
         </div>
 
-        <Navigation permissions={permissions} pathname={pathname} onNavigate={() => setMobileOpen(false)} />
+        <Navigation
+          expenseCategories={expenseCategories}
+          isSuperadminUser={user.role === "SUPERADMIN"}
+          permissions={permissions}
+          pathname={pathname}
+          selectedAccountingExpenseCategoryId={selectedAccountingExpenseCategoryId}
+          selectedAccountingSource={selectedAccountingSource}
+          selectedCashExpenseCategoryId={selectedCashExpenseCategoryId}
+          selectedCashType={selectedCashType}
+          selectedExpenseCategoryId={selectedExpenseCategoryId}
+          onNavigate={() => setMobileOpen(false)}
+        />
 
         <footer className="sidebar-credit">
           <strong>SMP Nusantara</strong>
@@ -237,7 +421,7 @@ export function AppShell({ children, user, permissions }: AppShellProps) {
             <div className="user-chip">
               <BookOpenCheck size={18} />
               <span>{user.name}</span>
-              <small>{roleText(user.role)}</small>
+              <small>{user.roleName ?? user.role}</small>
             </div>
             <form action={logoutAction}>
               <button className="icon-button danger-icon" type="submit" title="Keluar">

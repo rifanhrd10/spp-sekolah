@@ -3,11 +3,13 @@ import {
   Banknote,
   BookOpen,
   ClipboardList,
+  Download,
   LayoutDashboard,
   ReceiptText,
   Users,
   WalletCards,
 } from "lucide-react";
+import Link from "next/link";
 import { NoticeFromParams, type PageSearchParams } from "@/components/notice-from-params";
 import { DateRangeFilter } from "@/components/date-range-filter";
 import { SortableTh } from "@/components/sortable-th";
@@ -163,6 +165,11 @@ export default async function ReportsPage({ searchParams }: { searchParams: Page
   const paginated = paginateItems(sortedRows, page, pageSize);
   const preserve = { assetAccountId, dir: sortDirection, from, q: query, sheet, sort: sortKey, to };
   const tablePreserve = { assetAccountId, from, pageSize: String(pageSize), q: query, sheet, to };
+  const exportParams = new URLSearchParams();
+  for (const [key, value] of Object.entries({ assetAccountId, dir: sortDirection, from, q: query, sheet, sort: sortKey, to })) {
+    if (value) exportParams.set(key, value);
+  }
+  const exportHref = `/laporan/export${exportParams.size ? `?${exportParams.toString()}` : ""}`;
   const assetFilter = (
     <TableSelectFilter
       allLabel="Semua kas / bank"
@@ -182,7 +189,14 @@ export default async function ReportsPage({ searchParams }: { searchParams: Page
 
   return (
     <main className="page workbook-page">
-      <WorkbookTabs active={sheet} pathname="/laporan" tabs={reportTabs} />
+      <div className="workbook-tabs-bar">
+        <WorkbookTabs active={sheet} pathname="/laporan" preserve={{ assetAccountId, from, q: query, to }} tabs={reportTabs} />
+        <div className="workbook-tabs-actions">
+          <Link className="btn btn-secondary" href={exportHref}>
+            <Download size={17} /> Export Excel
+          </Link>
+        </div>
+      </div>
       <NoticeFromParams searchParams={searchParams} />
       <div className="report-filter-row">
         <DateRangeFilter from={from} pathname="/laporan" preserve={{ assetAccountId, q: query, sheet }} to={to} />

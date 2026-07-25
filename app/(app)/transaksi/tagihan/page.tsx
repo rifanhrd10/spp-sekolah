@@ -233,7 +233,10 @@ export default async function InvoicesPage({
     <main className="page">
       <section className="page-title">
         <div className="page-title-copy">
-          <div className="table-toolbar-controls"><TableSearch placeholder="Cari tagihan, siswa, kelas, jenis, atau status" query={query} /><TablePageSizeSelect pageSize={paginatedInvoices.pageSize} pathname="/transaksi/tagihan" preserve={{ dir: sortDirection, q: query, sort: sortKey }} /></div>
+        <div className="table-toolbar-controls">
+          <TablePageSizeSelect pageSize={paginatedInvoices.pageSize} pathname="/transaksi/tagihan" preserve={{ dir: sortDirection, q: query, sort: sortKey }} />
+          <TableSearch placeholder="Cari tagihan, siswa, kelas, jenis, atau status" query={query} />
+        </div>
         </div>
         <div className="page-actions">
           <Modal

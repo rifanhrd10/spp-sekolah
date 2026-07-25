@@ -1,5 +1,7 @@
 import { AccountType, CashType, PermissionKey } from "@prisma/client";
-import { ArrowDownToLine, ArrowUpFromLine, Pencil, Plus } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, Download, Pencil, Plus } from "lucide-react";
+import Link from "next/link";
+import { redirect } from "next/navigation";
 import {
   createCashTransaction,
   deleteCashTransaction,
@@ -20,6 +22,7 @@ import { requirePermission } from "@/lib/auth";
 import { currency, shortDate } from "@/lib/format";
 import { isWithinDateRange, readDateParam } from "@/lib/date-range";
 import { paginateItems, readPageParam, readPageSizeParam } from "@/lib/pagination";
+import { getAllowedExpenseCategoryIds } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { matchesSearch, readSearchParam } from "@/lib/search";
 import { compareValues, readSortDirectionParam, readSortKeyParam } from "@/lib/sort";
@@ -139,18 +142,40 @@ export default async function CashBookPage({
   const from = readDateParam(params, "from");
   const to = readDateParam(params, "to");
   const assetAccountId = typeof params.assetAccountId === "string" ? params.assetAccountId : "";
+  const type = params.type === CashType.MASUK || params.type === CashType.KELUAR ? params.type : "";
+  const expenseCategoryId = typeof params.expenseCategoryId === "string" ? params.expenseCategoryId : "";
   const canManage = user.permissions.includes(PermissionKey.CASHBOOK_MANAGE);
-  const [entries, accounts] = await Promise.all([
-    prisma.cashTransaction.findMany({
-      where: { deletedAt: null },
-      include: { assetAccount: true, contraAccount: true },
-      orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+  const allowedExpenseCategoryIds = await getAllowedExpenseCategoryIds(user.role);
+  const allowedCategoryFilter = allowedExpenseCategoryIds === null ? {} : { id: { in: allowedExpenseCategoryIds } };
+  const [expenseCategories, accounts] = await Promise.all([
+    prisma.expenseCategory.findMany({
+      where: { active: true, deletedAt: null, ...allowedCategoryFilter },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
     }),
     prisma.account.findMany({
       where: { active: true, deletedAt: null },
       orderBy: { code: "asc" },
     }),
   ]);
+  const selectedExpenseCategory = expenseCategories.find((category) => category.id === expenseCategoryId);
+  if (expenseCategoryId && !selectedExpenseCategory) {
+    redirect("/buku-kas?notice=Akses kategori pengeluaran tersebut tidak tersedia.&noticeType=error");
+  }
+  const effectiveType = expenseCategoryId ? CashType.KELUAR : type;
+  const entries = await prisma.cashTransaction.findMany({
+    where: {
+      deletedAt: null,
+      ...(effectiveType ? { type: effectiveType } : {}),
+      ...(expenseCategoryId ? { expense: { is: { categoryId: expenseCategoryId } } } : {}),
+    },
+    include: {
+      assetAccount: true,
+      contraAccount: true,
+      expense: { include: { categoryRef: true } },
+    },
+    orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+  });
   const rangeEntries = entries.filter((item) => {
     if (!isWithinDateRange(item.date, from, to)) return false;
     if (!assetAccountId) return true;
@@ -164,6 +189,8 @@ export default async function CashBookPage({
       item.createdBy,
       item.assetAccount?.code,
       item.assetAccount?.name,
+      item.expense?.categoryRef?.name,
+      item.expense?.categoryNameSnapshot,
     ),
   );
   const sortedEntries = [...filteredEntries].sort((left, right) => {
@@ -183,7 +210,7 @@ export default async function CashBookPage({
   const paginatedEntries = paginateItems(sortedEntries, page, pageSize);
   const assetAccounts = accounts.filter((account) => account.type === AccountType.ASET);
   const contraAccounts = accounts.filter((account) => account.type !== AccountType.ASET);
-  const tablePreserve = { assetAccountId, from, pageSize: String(pageSize), q: query, to };
+  const tablePreserve = { assetAccountId, expenseCategoryId, from, pageSize: String(pageSize), q: query, to, type: effectiveType };
   const scopedEntries = assetAccountId
     ? entries.filter((item) => item.assetAccountId === assetAccountId)
     : entries;
@@ -197,29 +224,43 @@ export default async function CashBookPage({
     (sum, item) => sum + (item.type === CashType.MASUK ? item.amount : -item.amount),
     0,
   );
+  const exportParams = new URLSearchParams();
+  for (const [key, value] of Object.entries({ assetAccountId, dir: sortDirection, expenseCategoryId, from, q: query, sort: sortKey, to, type: effectiveType })) {
+    if (value) exportParams.set(key, value);
+  }
+  const exportHref = `/buku-kas/export${exportParams.size ? `?${exportParams.toString()}` : ""}`;
 
   return (
     <main className="page">
       <section className="page-title">
         <div className="page-title-copy">
-          <div className="table-toolbar-controls"><TableSearch placeholder="Cari keterangan, jenis transaksi, atau pencatat" preserve={{ assetAccountId, from, to }} query={query} /><TableSelectFilter allLabel="Semua kas / bank" options={assetAccounts.map((account) => ({ label: `${account.code} - ${account.name}`, value: account.id }))} preserve={{ from, q: query, sort: sortKey, to }} value={assetAccountId} valueKey="assetAccountId" /><TablePageSizeSelect pageSize={paginatedEntries.pageSize} pathname="/buku-kas" preserve={{ assetAccountId, dir: sortDirection, from, q: query, sort: sortKey, to }} /></div>
+          <div className="table-toolbar-controls transaction-toolbar-controls">
+            <TablePageSizeSelect pageSize={paginatedEntries.pageSize} pathname="/buku-kas" preserve={{ assetAccountId, dir: sortDirection, expenseCategoryId, from, q: query, sort: sortKey, to, type: effectiveType }} />
+            <TableSearch placeholder="Cari keterangan, jenis transaksi, atau pencatat" preserve={{ assetAccountId, expenseCategoryId, from, to, type: effectiveType }} query={query} />
+            <TableSelectFilter allLabel="Semua kas / bank" options={assetAccounts.map((account) => ({ label: `${account.code} - ${account.name}`, value: account.id }))} preserve={{ expenseCategoryId, from, q: query, sort: sortKey, to, type: effectiveType }} value={assetAccountId} valueKey="assetAccountId" />
+            <DateRangeFilter from={from} pathname="/buku-kas" preserve={{ assetAccountId, dir: sortDirection, expenseCategoryId, q: query, sort: sortKey, type: effectiveType }} to={to} />
+          </div>
         </div>
-        {canManage ? (
-          <Modal
-            title="Tambah Transaksi Kas"
-            description="Transaksi manual otomatis membentuk jurnal seimbang."
-            trigger={
-              <button className="btn btn-create" type="button">
-                <Plus size={17} /> Tambah Kas
-              </button>
-            }
-          >
-            <CashForm action={createCashTransaction} assetAccounts={assetAccounts} contraAccounts={contraAccounts} />
-          </Modal>
-        ) : null}
+        <div className="page-actions">
+          <Link className="btn btn-secondary" href={exportHref}>
+            <Download size={17} /> Export Excel
+          </Link>
+          {canManage ? (
+            <Modal
+              title="Tambah Transaksi Kas"
+              description="Transaksi manual otomatis membentuk jurnal seimbang."
+              trigger={
+                <button className="btn btn-create" type="button">
+                  <Plus size={17} /> Tambah Kas
+                </button>
+              }
+            >
+              <CashForm action={createCashTransaction} assetAccounts={assetAccounts} contraAccounts={contraAccounts} />
+            </Modal>
+          ) : null}
+        </div>
       </section>
       <NoticeFromParams searchParams={searchParams} />
-      <DateRangeFilter from={from} pathname="/buku-kas" preserve={{ assetAccountId, q: query }} to={to} />
       <section className="summary-grid report">
         <div className="metric green">
           <span className="label">Total Kas Masuk</span>
@@ -233,7 +274,7 @@ export default async function CashBookPage({
           </div>
         </div>
         <div className="metric rose">
-          <span className="label">Total Kas Keluar</span>
+          <span className="label">{selectedExpenseCategory ? `Total ${selectedExpenseCategory.name}` : "Total Kas Keluar"}</span>
           <strong>{currency(totalOut)}</strong>
           <div className="foot">
             <span>
@@ -356,7 +397,7 @@ export default async function CashBookPage({
             </tbody>
           </table>
         </div>
-        <TablePagination currentPage={paginatedEntries.currentPage} endItem={paginatedEntries.endItem} pageSize={paginatedEntries.pageSize} pathname="/buku-kas" preserve={{ assetAccountId, dir: sortDirection, from, q: query, sort: sortKey, to }} startItem={paginatedEntries.startItem} totalItems={paginatedEntries.totalItems} totalPages={paginatedEntries.totalPages} />
+        <TablePagination currentPage={paginatedEntries.currentPage} endItem={paginatedEntries.endItem} pageSize={paginatedEntries.pageSize} pathname="/buku-kas" preserve={{ assetAccountId, dir: sortDirection, expenseCategoryId, from, q: query, sort: sortKey, to, type: effectiveType }} startItem={paginatedEntries.startItem} totalItems={paginatedEntries.totalItems} totalPages={paginatedEntries.totalPages} />
       </section>
     </main>
   );

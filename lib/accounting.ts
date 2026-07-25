@@ -15,6 +15,10 @@ export function receiptNumber() {
   return serial("KWT");
 }
 
+export function expenseReceiptNumber() {
+  return serial("NOTA");
+}
+
 export async function postPaymentAccounting(
   tx: TransactionClient,
   input: {

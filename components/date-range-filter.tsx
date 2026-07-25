@@ -26,9 +26,8 @@ export function DateRangeFilter({
         <span>Dari</span>
         <input defaultValue={from} name="from" type="date" />
       </label>
-      <span className="date-range-separator">s.d.</span>
-      <label>
-        <span>Sampai</span>
+      <span className="date-range-separator">s.d</span>
+      <label aria-label="Tanggal sampai">
         <input defaultValue={to} name="to" type="date" />
       </label>
       <button className="btn btn-secondary date-filter-submit" type="submit">Terapkan</button>

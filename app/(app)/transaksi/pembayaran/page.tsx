@@ -1,7 +1,7 @@
 import { AccountType, PermissionKey } from "@prisma/client";
 import { Banknote, Pencil, Plus, Printer, ReceiptText, UsersRound } from "lucide-react";
 import Link from "next/link";
-import { deletePayment, updatePayment } from "@/app/actions";
+import { deletePaymentReceipt, updatePaymentReceipt } from "@/app/actions";
 import { ConfirmDelete, Modal, ModalCancelButton } from "@/components/modal";
 import { MoneyInput } from "@/components/money-input";
 import { PaymentEntry } from "@/components/payment-entry";
@@ -55,36 +55,57 @@ export default async function PaymentsPage({
       orderBy: { code: "asc" },
     }),
   ]);
-  const filteredPayments = payments.filter((item) =>
+  type PaymentItem = (typeof payments)[number];
+  const paymentRows = Array.from(
+    payments.reduce((map, item) => {
+      const key = item.receiptNo ?? item.id;
+      const existing = map.get(key) ?? {
+        id: item.id,
+        receiptNo: item.receiptNo,
+        paidAt: item.paidAt,
+        method: item.method,
+        note: item.note,
+        receivedBy: item.receivedBy,
+        items: [] as PaymentItem[],
+        totalAmount: 0,
+      };
+      existing.items.push(item);
+      existing.totalAmount += item.amount;
+      if (item.paidAt > existing.paidAt) existing.paidAt = item.paidAt;
+      map.set(key, existing);
+      return map;
+    }, new Map<string, { id: string; receiptNo: string | null; paidAt: Date; method: string; note: string | null; receivedBy: string; items: PaymentItem[]; totalAmount: number }>()),
+  ).map(([, row]) => row);
+  const filteredPaymentRows = paymentRows.filter((row) =>
     matchesSearch(
       query,
-      item.receiptNo,
-      item.invoice.student.name,
-      item.invoice.student.classRoom?.name ?? item.invoice.student.classNameSnapshot,
-      item.invoice.title,
-      item.method,
-      item.receivedBy,
-      item.cashEntry?.assetAccount?.name,
-      item.cashEntry?.assetAccount?.code,
+      row.receiptNo,
+      row.items[0]?.invoice.student.name,
+      row.items[0]?.invoice.student.classRoom?.name ?? row.items[0]?.invoice.student.classNameSnapshot,
+      row.items.map((item) => item.invoice.title).join(" "),
+      row.method,
+      row.receivedBy,
+      row.items[0]?.cashEntry?.assetAccount?.name,
+      row.items[0]?.cashEntry?.assetAccount?.code,
     ),
   );
-  const sortedPayments = [...filteredPayments].sort((left, right) => {
+  const sortedPaymentRows = [...filteredPaymentRows].sort((left, right) => {
     switch (sortKey) {
       case "student":
-        return compareValues(left.invoice.student.name, right.invoice.student.name, sortDirection);
+        return compareValues(left.items[0]?.invoice.student.name, right.items[0]?.invoice.student.name, sortDirection);
       case "invoice":
-        return compareValues(left.invoice.title, right.invoice.title, sortDirection);
+        return compareValues(left.items.map((item) => item.invoice.title).join(" "), right.items.map((item) => item.invoice.title).join(" "), sortDirection);
       case "method":
         return compareValues(left.method, right.method, sortDirection);
       case "amount":
-        return compareValues(left.amount, right.amount, sortDirection);
+        return compareValues(left.totalAmount, right.totalAmount, sortDirection);
       case "receivedBy":
         return compareValues(left.receivedBy, right.receivedBy, sortDirection);
       default:
         return compareValues(left.paidAt, right.paidAt, sortDirection);
     }
   });
-  const paginatedPayments = paginateItems(sortedPayments, page, pageSize);
+  const paginatedPaymentRows = paginateItems(sortedPaymentRows, page, pageSize);
   const totalPaid = payments.reduce((sum, payment) => sum + payment.amount, 0);
   const uniqueStudents = new Set(payments.map((payment) => payment.invoice.studentId)).size;
   const latestPayment = payments[0]?.paidAt;
@@ -109,22 +130,34 @@ export default async function PaymentsPage({
       return map;
     }, new Map<string, { id: string; name: string; nisn: string; className: string; invoices: { id: string; title: string; category: string; dueDate: string; remaining: number }[] }>()),
   ).map(([, student]) => student);
-  const editForm = (item: (typeof payments)[number]) => (
-    <form action={updatePayment} className="form-stack">
-      <input name="id" type="hidden" value={item.id} />
+  const editForm = (row: (typeof paymentRows)[number]) => (
+    <form action={updatePaymentReceipt} className="form-stack">
       <div className="rounded-lg bg-slate-50 p-3 text-sm">
-        <strong>{item.invoice.student.name}</strong>
-        <div>{item.invoice.title}</div>
+        <strong>{row.items[0]?.invoice.student.name}</strong>
+        <div>{row.receiptNo || "-"} · {row.items.length} item pembayaran</div>
+      </div>
+      <div className="batch-lines">
+        {row.items.map((item, index) => (
+          <section className="batch-line selected" key={item.id}>
+            <input name="id" type="hidden" value={item.id} />
+            <div className="batch-line-head">
+              <div>
+                <strong>Item {index + 1}: {item.invoice.title}</strong>
+                <div className="subtle">{paymentTypeLabel(item.invoice.type)}</div>
+              </div>
+            </div>
+            <label>
+              Nominal
+              <MoneyInput defaultValue={item.amount} name="amount" />
+            </label>
+          </section>
+        ))}
       </div>
       <div className="field-grid">
         <label>
-          Nominal
-          <MoneyInput defaultValue={item.amount} />
-        </label>
-        <label>
           Tanggal
           <input
-            defaultValue={item.paidAt.toISOString().slice(0, 10)}
+            defaultValue={row.paidAt.toISOString().slice(0, 10)}
             name="paidAt"
             required
             type="date"
@@ -133,7 +166,7 @@ export default async function PaymentsPage({
       </div>
       <label>
         Kas / Bank
-        <select defaultValue={item.cashEntry?.assetAccountId ?? ""} name="assetAccountId" required>
+        <select defaultValue={row.items[0]?.cashEntry?.assetAccountId ?? ""} name="assetAccountId" required>
           <option disabled value="">Pilih kas / bank</option>
           {assetAccounts.map((account) => (
             <option key={account.id} value={account.id}>
@@ -144,7 +177,7 @@ export default async function PaymentsPage({
       </label>
       <label>
         Metode
-        <select defaultValue={item.method} name="method">
+        <select defaultValue={row.method} name="method">
           <option>Tunai</option>
           <option>Transfer</option>
           <option>QRIS</option>
@@ -152,7 +185,7 @@ export default async function PaymentsPage({
       </label>
       <label>
         Catatan
-        <input defaultValue={item.note ?? ""} name="note" />
+        <input defaultValue={row.note ?? ""} name="note" />
       </label>
       <div className="form-actions">
         <ModalCancelButton />
@@ -166,9 +199,13 @@ export default async function PaymentsPage({
     <main className="page">
       <section className="page-title">
         <div className="page-title-copy">
-          <div className="table-toolbar-controls"><TableSearch placeholder="Cari kwitansi, siswa, tagihan, metode, atau petugas" query={query} /><TablePageSizeSelect pageSize={paginatedPayments.pageSize} pathname="/transaksi/pembayaran" preserve={{ dir: sortDirection, q: query, sort: sortKey }} /></div>
+          <div className="table-toolbar-controls">
+            <TablePageSizeSelect pageSize={paginatedPaymentRows.pageSize} pathname="/transaksi/pembayaran" preserve={{ dir: sortDirection, q: query, sort: sortKey }} />
+            <TableSearch placeholder="Cari kwitansi, siswa, tagihan, metode, atau petugas" query={query} />
+          </div>
         </div>
         <Modal
+          size="xl"
           title="Catat Pembayaran Siswa"
           description="Tagihan, kas, dan akuntansi diperbarui dalam satu transaksi."
           trigger={
@@ -182,7 +219,7 @@ export default async function PaymentsPage({
       </section>
       <NoticeFromParams searchParams={searchParams} />
       <section className="summary-grid report">
-        <div className="metric green"><div><span className="label">Total Pembayaran</span><strong>{currency(totalPaid)}</strong></div><div className="foot"><span>{payments.length} transaksi</span><Banknote size={20} /></div></div>
+        <div className="metric green"><div><span className="label">Total Pembayaran</span><strong>{currency(totalPaid)}</strong></div><div className="foot"><span>{paymentRows.length} kwitansi · {payments.length} item</span><Banknote size={20} /></div></div>
         <div className="metric"><div><span className="label">Siswa Membayar</span><strong>{uniqueStudents}</strong></div><div className="foot"><span>Terhubung ke tagihan</span><UsersRound size={20} /></div></div>
         <div className="metric cyan"><div><span className="label">Transaksi Terakhir</span><strong>{latestPayment ? shortDate(latestPayment) : "-"}</strong></div><div className="foot"><span>Kwitansi otomatis</span><ReceiptText size={20} /></div></div>
       </section>
@@ -203,41 +240,44 @@ export default async function PaymentsPage({
               </tr>
             </thead>
             <tbody>
-              {paginatedPayments.items.length ? (
-                paginatedPayments.items.map((item, index) => (
-                  <tr key={item.id}>
-                    <td className="table-number">{paginatedPayments.startItem + index}</td>
+              {paginatedPaymentRows.items.length ? (
+                paginatedPaymentRows.items.map((row, index) => {
+                  const firstItem = row.items[0];
+                  return (
+                  <tr key={row.receiptNo ?? row.id}>
+                    <td className="table-number">{paginatedPaymentRows.startItem + index}</td>
                     <td>
-                      <strong>{item.receiptNo || "-"}</strong>
-                      <div className="subtle">{shortDate(item.paidAt)}</div>
+                      <strong>{row.receiptNo || "-"}</strong>
+                      <div className="subtle">{shortDate(row.paidAt)}</div>
                     </td>
                     <td>
-                      <Link className="inline-link" href={`/master/siswa?classId=${item.invoice.student.classRoomId ?? ""}&q=${encodeURIComponent(item.invoice.student.name)}`}>{item.invoice.student.name}</Link>
+                      <Link className="inline-link" href={`/master/siswa?classId=${firstItem?.invoice.student.classRoomId ?? ""}&q=${encodeURIComponent(firstItem?.invoice.student.name ?? "")}`}>{firstItem?.invoice.student.name ?? "-"}</Link>
                       <div className="subtle">
-                        {item.invoice.student.classRoom?.name ?? item.invoice.student.classNameSnapshot ?? "-"}
+                        {firstItem?.invoice.student.classRoom?.name ?? firstItem?.invoice.student.classNameSnapshot ?? "-"}
                       </div>
                     </td>
                     <td>
-                      {item.invoice.title}
+                      {row.items.length > 1 ? `${row.items.length} tagihan` : firstItem?.invoice.title}
                       <div className="subtle">
-                        {paymentTypeLabel(item.invoice.type)}
+                        {row.items.map((item) => item.invoice.title).join(", ")}
                       </div>
                     </td>
-                    <td>{item.cashEntry?.assetAccount ? <><strong>{item.cashEntry.assetAccount.code}</strong><div className="subtle">{item.cashEntry.assetAccount.name}</div></> : "-"}</td>
-                    <td>{item.method}</td>
-                    <td className="money green">{currency(item.amount)}</td>
-                    <td>{item.receivedBy}</td>
+                    <td>{firstItem?.cashEntry?.assetAccount ? <><strong>{firstItem.cashEntry.assetAccount.code}</strong><div className="subtle">{firstItem.cashEntry.assetAccount.name}</div></> : "-"}</td>
+                    <td>{row.method}</td>
+                    <td className="money green">{currency(row.totalAmount)}</td>
+                    <td>{row.receivedBy}</td>
                     <td className="table-actions">
                       <div className="table-action-buttons">
                         <Link
                           aria-label="Cetak kwitansi"
                           className="btn-icon btn-create"
-                          href={`/kwitansi/${item.id}`}
+                          href={`/kwitansi/${row.id}`}
                           title="Cetak kwitansi"
                         >
                           <Printer size={15} />
                         </Link>
                         <Modal
+                          size="xl"
                           title="Ubah Pembayaran"
                           trigger={
                             <button
@@ -250,17 +290,18 @@ export default async function PaymentsPage({
                             </button>
                           }
                         >
-                          {editForm(item)}
+                          {editForm(row)}
                         </Modal>
                         <ConfirmDelete
-                          action={deletePayment}
-                          id={item.id}
-                          label="pembayaran"
+                          action={deletePaymentReceipt}
+                          id={row.id}
+                          label="kwitansi pembayaran"
                         />
                       </div>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               ) : (
                 <tr>
                   <td className="empty" colSpan={9}>
@@ -271,7 +312,7 @@ export default async function PaymentsPage({
             </tbody>
           </table>
         </div>
-        <TablePagination currentPage={paginatedPayments.currentPage} endItem={paginatedPayments.endItem} pageSize={paginatedPayments.pageSize} pathname="/transaksi/pembayaran" preserve={{ dir: sortDirection, q: query, sort: sortKey }} startItem={paginatedPayments.startItem} totalItems={paginatedPayments.totalItems} totalPages={paginatedPayments.totalPages} />
+        <TablePagination currentPage={paginatedPaymentRows.currentPage} endItem={paginatedPaymentRows.endItem} pageSize={paginatedPaymentRows.pageSize} pathname="/transaksi/pembayaran" preserve={{ dir: sortDirection, q: query, sort: sortKey }} startItem={paginatedPaymentRows.startItem} totalItems={paginatedPaymentRows.totalItems} totalPages={paginatedPaymentRows.totalPages} />
       </section>
     </main>
   );

@@ -17,12 +17,12 @@ export function shortDate(value: Date | string) {
 
 export function roleLabel(role: string) {
   const labels: Record<string, string> = {
-    bendahara: "Bendahara",
-    kepala_sekolah: "Kepala Sekolah",
-    admin: "Admin",
+    BENDAHARA: "Bendahara",
+    KEPALA_SEKOLAH: "Kepala Sekolah",
+    ADMIN: "Administrator",
   };
 
-  return labels[role] ?? "Bendahara";
+  return labels[role] ?? role.replaceAll("_", " ");
 }
 
 export function paymentTypeLabel(type: string) {

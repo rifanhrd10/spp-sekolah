@@ -13,10 +13,12 @@ function formatted(value: string) {
 export function MoneyInput({
   defaultValue,
   name = "amount",
+  onValueChange,
   placeholder = "0",
 }: {
   defaultValue?: string | number;
   name?: string;
+  onValueChange?: (value: number) => void;
   placeholder?: string;
 }) {
   const [value, setValue] = useState(() => digits(defaultValue));
@@ -26,7 +28,11 @@ export function MoneyInput({
       <span>Rp.</span>
       <input
         inputMode="numeric"
-        onChange={(event) => setValue(digits(event.target.value))}
+        onChange={(event) => {
+          const nextValue = digits(event.target.value);
+          setValue(nextValue);
+          onValueChange?.(Number(nextValue || 0));
+        }}
         placeholder={placeholder}
         required
         type="text"

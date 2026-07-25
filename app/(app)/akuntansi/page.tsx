@@ -3,12 +3,15 @@ import {
   BookOpen,
   BookText,
   CircleDollarSign,
+  Download,
   ListTree,
   Pencil,
   Plus,
   Rows3,
   Scale,
 } from "lucide-react";
+import Link from "next/link";
+import { redirect } from "next/navigation";
 import {
   createAccount,
   createJournalEntry,
@@ -28,6 +31,7 @@ import { requirePermission } from "@/lib/auth";
 import { currency, shortDate } from "@/lib/format";
 import { isWithinDateRange, readDateParam } from "@/lib/date-range";
 import { paginateItems, readPageParam, readPageSizeParam } from "@/lib/pagination";
+import { getAllowedExpenseCategoryIds } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { matchesSearch, readSearchParam } from "@/lib/search";
 import { compareValues, readSortDirectionParam, readSortKeyParam } from "@/lib/sort";
@@ -38,6 +42,8 @@ const sheets = [
   { key: "neraca-saldo", label: "Neraca Saldo", description: "Ringkasan saldo setiap akun", icon: Scale },
   { key: "daftar-akun", label: "Daftar Akun", description: "Master kode rekening", icon: ListTree },
 ];
+
+const sourceFilters = ["PAYMENT", "EXPENSE", "CASH", "MANUAL"] as const;
 
 function accountBalance(type: AccountType, debit: number, credit: number) {
   return type === AccountType.ASET || type === AccountType.BEBAN
@@ -88,8 +94,14 @@ export default async function AccountingPage({ searchParams }: { searchParams: P
   const from = readDateParam(params, "from");
   const to = readDateParam(params, "to");
   const assetAccountId = typeof params.assetAccountId === "string" ? params.assetAccountId : "";
+  const source = typeof params.source === "string" && sourceFilters.includes(params.source as typeof sourceFilters[number])
+    ? params.source
+    : "";
+  const expenseCategoryId = typeof params.expenseCategoryId === "string" ? params.expenseCategoryId : "";
   const canManage = user.permissions.includes(PermissionKey.ACCOUNTING_MANAGE);
-  const [accounts, journals] = await Promise.all([
+  const allowedExpenseCategoryIds = await getAllowedExpenseCategoryIds(user.role);
+  const allowedCategoryFilter = allowedExpenseCategoryIds === null ? {} : { id: { in: allowedExpenseCategoryIds } };
+  const [accounts, journals, expenseCategories] = await Promise.all([
     prisma.account.findMany({
       where: { deletedAt: null },
       include: {
@@ -111,9 +123,33 @@ export default async function AccountingPage({ searchParams }: { searchParams: P
       include: { lines: { include: { account: true } } },
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
     }),
+    prisma.expenseCategory.findMany({
+      where: { active: true, deletedAt: null, ...allowedCategoryFilter },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    }),
   ]);
+  const selectedExpenseCategory = expenseCategories.find((category) => category.id === expenseCategoryId);
+  if (expenseCategoryId && !selectedExpenseCategory) {
+    redirect("/akuntansi?notice=Akses kategori pengeluaran tersebut tidak tersedia.&noticeType=error");
+  }
+  const expenseIds = expenseCategoryId
+    ? await prisma.expense.findMany({
+      where: { categoryId: expenseCategoryId, deletedAt: null },
+      select: { id: true },
+    })
+    : [];
+  const expenseIdSet = new Set(expenseIds.map((expense) => expense.id));
+  const effectiveSource = expenseCategoryId ? "EXPENSE" : source;
+  const sourceFilteredJournals = journals.filter((journal) => {
+    if (expenseCategoryId) {
+      return journal.sourceType === "EXPENSE" && Boolean(journal.sourceId && expenseIdSet.has(journal.sourceId));
+    }
+    if (effectiveSource) return journal.sourceType === effectiveSource;
+    return true;
+  });
   const assetAccounts = accounts.filter((account) => account.active && account.type === AccountType.ASET);
-  const rangeJournals = journals.filter((journal) => {
+  const rangeJournals = sourceFilteredJournals.filter((journal) => {
     if (!isWithinDateRange(journal.date, from, to)) return false;
     if (!assetAccountId) return true;
     return journal.lines.some((line) => line.accountId === assetAccountId);
@@ -168,13 +204,18 @@ export default async function AccountingPage({ searchParams }: { searchParams: P
     );
   });
   const paginated = paginateItems(sortedRows, page, pageSize);
-  const preserve = { assetAccountId, dir: sortDirection, from, q: query, sheet, sort: sortKey, to };
-  const pathPreserve = { assetAccountId, from, pageSize: String(pageSize), q: query, sheet, to };
+  const preserve = { assetAccountId, dir: sortDirection, expenseCategoryId, from, q: query, sheet, sort: sortKey, source: effectiveSource, to };
+  const pathPreserve = { assetAccountId, expenseCategoryId, from, pageSize: String(pageSize), q: query, sheet, source: effectiveSource, to };
   const operationalAccountTypes = [AccountType.ASET, AccountType.PENDAPATAN, AccountType.BEBAN];
   const advancedAccountTypes = [AccountType.KEWAJIBAN, AccountType.MODAL];
-  const canCreateManualJournal = canManage && user.role === "ADMIN";
+  const canCreateManualJournal = canManage && ["ADMIN", "SUPERADMIN"].includes(user.role);
   const accountUsageCount = (account: (typeof accounts)[number]) =>
     Object.values(account._count).reduce((total, count) => total + count, 0);
+  const exportParams = new URLSearchParams();
+  for (const [key, value] of Object.entries({ assetAccountId, dir: sortDirection, expenseCategoryId, from, q: query, sheet, sort: sortKey, source: effectiveSource, to })) {
+    if (value) exportParams.set(key, value);
+  }
+  const exportHref = `/akuntansi/export${exportParams.size ? `?${exportParams.toString()}` : ""}`;
 
   const accountForm = (account?: (typeof accounts)[number]) => {
     const isUsed = account ? accountUsageCount(account) > 0 : false;
@@ -239,12 +280,15 @@ export default async function AccountingPage({ searchParams }: { searchParams: P
   return (
     <main className="page workbook-page">
       <div className="workbook-tabs-bar">
-        <WorkbookTabs active={sheet} pathname="/akuntansi" tabs={sheets} />
-        {canManage ? (
-          <div className="workbook-tabs-actions">
+        <WorkbookTabs active={sheet} pathname="/akuntansi" preserve={{ assetAccountId, expenseCategoryId, from, q: query, source: effectiveSource, to }} tabs={sheets} />
+        <div className="workbook-tabs-actions">
+          <Link className="btn btn-secondary" href={exportHref}>
+            <Download size={17} /> Export Excel
+          </Link>
+          {canManage ? (
             <Modal title="Tambah Akun" trigger={<button className="btn btn-secondary" type="button"><Plus size={17} /> Akun</button>}>{accountForm()}</Modal>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
       </div>
       <NoticeFromParams searchParams={searchParams} />
       <section className="accounting-overview-grid">
@@ -284,21 +328,23 @@ export default async function AccountingPage({ searchParams }: { searchParams: P
           </div>
         </section>
       ) : null}
-      {sheet !== "daftar-akun" ? <DateRangeFilter from={from} pathname="/akuntansi" preserve={{ assetAccountId, q: query, sheet }} to={to} /> : null}
       <section className="panel workbook-sheet">
         <div className="sheet-toolbar">
-          <div className="table-toolbar-controls">
-            <TableSearch placeholder={`Cari ${sheets.find((item) => item.key === sheet)?.label.toLowerCase()}`} preserve={{ assetAccountId, from, sheet, to }} query={query} />
+          <div className="table-toolbar-controls transaction-toolbar-controls">
+            <TablePageSizeSelect pageSize={paginated.pageSize} pathname="/akuntansi" preserve={preserve} />
+            <TableSearch placeholder={`Cari ${sheets.find((item) => item.key === sheet)?.label.toLowerCase()}`} preserve={{ assetAccountId, expenseCategoryId, from, sheet, source: effectiveSource, to }} query={query} />
             {sheet !== "daftar-akun" ? (
               <TableSelectFilter
                 allLabel="Semua kas / bank"
                 options={assetAccounts.map((account) => ({ label: `${account.code} - ${account.name}`, value: account.id }))}
-                preserve={{ from, q: query, sheet, sort: sortKey, to }}
+                preserve={{ expenseCategoryId, from, q: query, sheet, sort: sortKey, source: effectiveSource, to }}
                 value={assetAccountId}
                 valueKey="assetAccountId"
               />
             ) : null}
-            <TablePageSizeSelect pageSize={paginated.pageSize} pathname="/akuntansi" preserve={preserve} />
+            {sheet !== "daftar-akun" ? (
+              <DateRangeFilter from={from} pathname="/akuntansi" preserve={{ assetAccountId, dir: sortDirection, expenseCategoryId, q: query, sheet, sort: sortKey, source: effectiveSource }} to={to} />
+            ) : null}
           </div>
           <div className="sheet-toolbar-meta">
             {sheet === "jurnal" && canCreateManualJournal ? (

@@ -61,18 +61,18 @@ export default async function LoginPage({ searchParams }: { searchParams: Search
               <p>Silakan masuk menggunakan akun yang telah terdaftar.</p>
             </div>
 
-            {params.error ? <Notice key="login:error" type="error" message="Email atau password tidak sesuai." /> : null}
+              {params.error ? <Notice key="login:error" type="error" message="Username/email atau password tidak sesuai." /> : null}
 
             <form action={loginAction} className="form-grid">
               <label className="field">
-                <span>Email</span>
+                <span>Username / Email</span>
                 <input
                   autoComplete="username"
                   defaultValue="admin@smp.local"
                   name="email"
-                  placeholder="Masukkan email"
+                  placeholder="Masukkan username atau email"
                   required
-                  type="email"
+                  type="text"
                 />
               </label>
               <label className="field">

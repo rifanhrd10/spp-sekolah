@@ -1,8 +1,11 @@
-import { PermissionKey, UserRole } from "@prisma/client";
-import { KeyRound, Pencil, Plus } from "lucide-react";
+import { PermissionKey } from "@prisma/client";
+import { KeyRound, Pencil, Plus, ShieldCheck } from "lucide-react";
 import {
+  createRole,
   createUser,
+  deleteRole,
   deleteUser,
+  updateRole,
   updateRolePermissions,
   updateUser,
 } from "@/app/actions";
@@ -17,16 +20,10 @@ import { SortableTh } from "@/components/sortable-th";
 import { TableSearch } from "@/components/table-search";
 import { requirePermission } from "@/lib/auth";
 import { paginateItems, readPageParam, readPageSizeParam } from "@/lib/pagination";
-import { defaultPermissions, permissionLabels } from "@/lib/permissions";
+import { defaultPermissions, permissionLabels, roleDisplayName } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { matchesSearch, readSearchParam } from "@/lib/search";
 import { compareValues, readSortDirectionParam, readSortKeyParam } from "@/lib/sort";
-
-const roles = [
-  { value: UserRole.ADMIN, label: "Administrator" },
-  { value: UserRole.BENDAHARA, label: "Bendahara" },
-  { value: UserRole.KEPALA_SEKOLAH, label: "Kepala Sekolah" },
-];
 
 export default async function UsersPage({
   searchParams,
@@ -40,16 +37,21 @@ export default async function UsersPage({
   const pageSize = readPageSizeParam(params, "pageSize");
   const sortKey = readSortKeyParam(params, "sort", "name");
   const sortDirection = readSortDirectionParam(params, "dir", "asc");
-  const [users, configuredPermissions] = await Promise.all([
-    prisma.user.findMany({ where: { deletedAt: null }, orderBy: [{ role: "asc" }, { name: "asc" }] }),
+  const superadmin = current.role === "SUPERADMIN";
+  const [users, roles, configuredPermissions, expenseCategories, configuredExpenseCategoryPermissions] = await Promise.all([
+    prisma.user.findMany({ where: { deletedAt: null, ...(superadmin ? {} : { role: { not: "SUPERADMIN" } }) }, orderBy: [{ role: "asc" }, { name: "asc" }] }),
+    prisma.role.findMany({ where: { deletedAt: null, ...(superadmin ? {} : { code: { not: "SUPERADMIN" } }) }, orderBy: [{ active: "desc" }, { name: "asc" }] }),
     prisma.rolePermission.findMany(),
+    prisma.expenseCategory.findMany({ where: { active: true, deletedAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
+    prisma.roleExpenseCategoryPermission.findMany(),
   ]);
+  const activeRoles = roles.filter((role) => role.active);
   const filteredUsers = users.filter((item) =>
     matchesSearch(
       query,
       item.name,
       item.email,
-      roles.find((role) => role.value === item.role)?.label,
+      roleDisplayName(item.role, roles),
     ),
   );
   const sortedUsers = [...filteredUsers].sort((left, right) => {
@@ -57,7 +59,7 @@ export default async function UsersPage({
       case "email":
         return compareValues(left.email, right.email, sortDirection);
       case "role":
-        return compareValues(roles.find((role) => role.value === left.role)?.label, roles.find((role) => role.value === right.role)?.label, sortDirection);
+        return compareValues(roleDisplayName(left.role, roles), roleDisplayName(right.role, roles), sortDirection);
       case "status":
         return compareValues(left.active, right.active, sortDirection);
       default:
@@ -92,9 +94,9 @@ export default async function UsersPage({
         <label>
           Role
           <select defaultValue={item?.role} name="role">
-            {roles.map((role) => (
-              <option key={role.value} value={role.value}>
-                {role.label}
+            {activeRoles.map((role) => (
+              <option key={role.code} value={role.code}>
+                {role.name}
               </option>
             ))}
           </select>
@@ -120,15 +122,44 @@ export default async function UsersPage({
       </div>
     </form>
   );
-  const roleForm = (role: UserRole) => {
-    const roleConfiguration = configuredPermissions.filter((item) => item.role === role);
+  const roleSettingsForm = (role?: (typeof roles)[number]) => (
+    <form action={role ? updateRole : createRole} className="form-stack">
+      {role ? <input name="id" type="hidden" value={role.id} /> : null}
+      <label>
+        Nama Role
+        <input defaultValue={role?.name} name="name" placeholder="Contoh: Tata Usaha" required />
+      </label>
+      {role ? (
+        <label>
+          Status
+          <select defaultValue={String(role.active)} name="active">
+            <option value="true">Aktif</option>
+            <option value="false">Nonaktif</option>
+          </select>
+        </label>
+      ) : null}
+      <div className="form-actions">
+        <ModalCancelButton />
+        <button className={`btn ${role ? "btn-edit" : "btn-save"}`} type="submit">
+          {role ? "Simpan Role" : "Tambah Role"}
+        </button>
+      </div>
+    </form>
+  );
+  const roleForm = (role: (typeof roles)[number]) => {
+    const roleConfiguration = configuredPermissions.filter((item) => item.role === role.code);
     const configured = roleConfiguration
       .filter((item) => item.allowed)
       .map((item) => item.permission);
-    const selected = roleConfiguration.length ? configured : defaultPermissions[role];
+    const selected = roleConfiguration.length ? configured : (defaultPermissions[role.code] ?? []);
+    const categoryConfiguration = configuredExpenseCategoryPermissions.filter((item) => item.role === role.code);
+    const selectedExpenseCategoryIds = categoryConfiguration.length
+      ? categoryConfiguration.filter((item) => item.allowed).map((item) => item.expenseCategoryId)
+      : expenseCategories.map((category) => category.id);
     return (
       <form action={updateRolePermissions} className="form-stack">
-        <input name="role" type="hidden" value={role} />
+        <input name="role" type="hidden" value={role.code} />
+        <div className="permission-group-title">Akses Menu & Fitur</div>
         <div className="permission-checkbox-grid">
           {Object.values(PermissionKey).map((permission) => (
             <label
@@ -145,6 +176,24 @@ export default async function UsersPage({
             </label>
           ))}
         </div>
+        <div className="permission-group-title">Akses Submenu Kategori Pengeluaran</div>
+        {expenseCategories.length ? (
+          <div className="permission-checkbox-grid">
+            {expenseCategories.map((category) => (
+              <label className="permission-checkbox" key={category.id}>
+                <input
+                  defaultChecked={selectedExpenseCategoryIds.includes(category.id)}
+                  name="expenseCategoryIds"
+                  type="checkbox"
+                  value={category.id}
+                />
+                <span>{category.name}</span>
+              </label>
+            ))}
+          </div>
+        ) : (
+          <p className="empty-inline">Belum ada kategori pengeluaran aktif.</p>
+        )}
         <div className="form-actions">
           <ModalCancelButton />
           <button className="btn btn-save" type="submit">
@@ -160,6 +209,17 @@ export default async function UsersPage({
         actions={
           <>
             {canRoles ? (
+              <>
+              <Modal
+                title="Tambah Role"
+                trigger={
+                  <button className="btn btn-secondary" type="button">
+                    <ShieldCheck size={16} /> Tambah Role
+                  </button>
+                }
+              >
+                {roleSettingsForm()}
+              </Modal>
               <Modal
                 size="lg"
                 title="Atur Hak Akses"
@@ -172,19 +232,30 @@ export default async function UsersPage({
               >
                 <div className="role-permission-list">
                   {roles.map((role, index) => (
-                    <details key={role.value} open={index === 0}>
+                    <details key={role.code} open={index === 0}>
                       <summary>
                         <span>
                           <KeyRound size={16} />
-                          <strong>{role.label}</strong>
+                          <strong>{role.name}</strong>
                         </span>
-                        <small>Atur akses</small>
+                        <small>{role.active ? "Atur akses" : "Nonaktif"}</small>
                       </summary>
-                      {roleForm(role.value)}
+                      <div className="role-management-card">
+                        {roleSettingsForm(role)}
+                        {role.code !== "ADMIN" && role.code !== "SUPERADMIN" ? (
+                          <ConfirmDelete
+                            action={deleteRole}
+                            id={role.id}
+                            label="role"
+                          />
+                        ) : null}
+                      </div>
+                      {roleForm(role)}
                     </details>
                   ))}
                 </div>
               </Modal>
+              </>
             ) : null}
           <Modal
             title="Tambah Pengguna"
@@ -225,7 +296,7 @@ export default async function UsersPage({
                     </td>
                     <td>{item.email}</td>
                     <td>
-                      {roles.find((role) => role.value === item.role)?.label}
+                      {roleDisplayName(item.role, roles)}
                     </td>
                     <td>
                       <span

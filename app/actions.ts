@@ -7,19 +7,19 @@ import {
   PaymentType,
   PermissionKey,
   Prisma,
-  UserRole,
 } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { clearSession, createSession, getCurrentUser, requireUser } from "@/lib/auth";
-import { assertBalanced, postExpenseAccounting, postPaymentAccounting, receiptNumber } from "@/lib/accounting";
+import { writeActivityLog } from "@/lib/activity-log";
+import { assertBalanced, expenseReceiptNumber, postExpenseAccounting, postPaymentAccounting, receiptNumber } from "@/lib/accounting";
 import { hashPassword, verifyPassword } from "@/lib/password";
-import { hasPermission } from "@/lib/permissions";
+import { canAccessExpenseCategory, hasPermission, normalizeRoleCode } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
 const loginSchema = z.object({
-  email: z.string().email(),
+  email: z.string().min(1),
   password: z.string().min(6),
 });
 
@@ -41,7 +41,7 @@ const userSchema = z.object({
   name: z.string().min(3),
   email: z.string().email(),
   password: z.string().min(6),
-  role: z.nativeEnum(UserRole),
+  role: z.string().min(1),
 });
 
 const userUpdateSchema = z.object({
@@ -51,7 +51,17 @@ const userUpdateSchema = z.object({
     (value) => value === "" ? undefined : value,
     z.string().min(6).optional(),
   ),
-  role: z.nativeEnum(UserRole),
+  role: z.string().min(1),
+});
+
+const roleSchema = z.object({
+  name: z.string().min(3),
+});
+
+const roleUpdateSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(3),
+  active: z.preprocess((value) => value === "true", z.boolean()),
 });
 
 const studentProfileSchema = z.object({
@@ -99,6 +109,18 @@ const paymentSchema = z.object({
   receivedBy: z.string().min(3),
 });
 
+const paymentBatchSchema = z.object({
+  assetAccountId: z.string().min(1),
+  paidAt: z.coerce.date(),
+  method: z.string().min(3),
+  note: z.string().optional(),
+  receivedBy: z.string().min(3),
+  lines: z.array(z.object({
+    invoiceId: z.string().min(1),
+    amount: z.coerce.number().int().positive(),
+  })).min(1),
+});
+
 const expenseSchema = z.object({
   categoryId: z.string().min(1),
   assetAccountId: z.string().min(1),
@@ -108,6 +130,30 @@ const expenseSchema = z.object({
   vendor: z.string().optional(),
   note: z.string().optional(),
   createdBy: z.string().min(3),
+});
+
+const expenseBatchSchema = z.object({
+  assetAccountId: z.string().min(1),
+  spentAt: z.coerce.date(),
+  createdBy: z.string().min(3),
+  lines: z.array(z.object({
+    categoryId: z.string().min(1),
+    title: z.string().min(3),
+    amount: z.coerce.number().int().positive(),
+    vendor: z.string().optional(),
+    note: z.string().optional(),
+  })).min(1),
+});
+
+const expenseReceiptUpdateSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1),
+  categoryIds: z.array(z.string().min(1)).min(1),
+  titles: z.array(z.string().min(3)).min(1),
+  amounts: z.array(z.coerce.number().int().positive()).min(1),
+  vendors: z.array(z.string().optional()).min(1),
+  notes: z.array(z.string().optional()).min(1),
+  assetAccountId: z.string().min(1),
+  spentAt: z.coerce.date(),
 });
 
 const expenseCategorySchema = z.object({
@@ -151,6 +197,15 @@ const paymentUpdateSchema = z.object({
   note: z.string().optional(),
 });
 
+const paymentReceiptUpdateSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1),
+  amounts: z.array(z.coerce.number().int().positive()).min(1),
+  assetAccountId: z.string().min(1),
+  paidAt: z.coerce.date(),
+  method: z.string().min(3),
+  note: z.string().optional(),
+});
+
 const manualJournalSchema = z.object({
   amount: z.coerce.number().int().positive(),
   creditAccountId: z.string().min(1),
@@ -173,6 +228,12 @@ const receiptSettingSchema = z.object({
 function getText(formData: FormData, key: string) {
   const value = formData.get(key);
   return typeof value === "string" ? value.trim() : "";
+}
+
+function getTexts(formData: FormData, key: string) {
+  return formData
+    .getAll(key)
+    .map((value) => (typeof value === "string" ? value.trim() : ""));
 }
 
 function redirectWithNotice(path: string, message: string, type: "success" | "error" = "success"): never {
@@ -202,6 +263,13 @@ function studentReturnPath(formData: FormData, overrides?: { classId?: string })
 
   const nextQuery = params.toString();
   return nextQuery ? `${pathname}?${nextQuery}` : pathname;
+}
+
+function expenseReturnPath(formData: FormData) {
+  const returnTo = getText(formData, "returnTo");
+  return returnTo.startsWith("/transaksi/pengeluaran")
+    ? returnTo
+    : "/transaksi/pengeluaran";
 }
 
 function firstZodMessage(error: z.ZodError) {
@@ -275,6 +343,30 @@ async function assertPermission(permission: PermissionKey) {
   return user;
 }
 
+async function logActivity(
+  user: Awaited<ReturnType<typeof requireUser>> | Awaited<ReturnType<typeof getCurrentUser>> | null,
+  action: string,
+  entity: string,
+  entityId?: string | null,
+  before?: unknown,
+  after?: unknown,
+) {
+  await writeActivityLog({
+    action,
+    entity,
+    entityId,
+    user,
+    before,
+    after,
+  });
+}
+
+function assertCanManageSuperadmin(currentUser: { role: string }, targetRole: string, path = "/master/pengguna") {
+  if (targetRole === "SUPERADMIN" && currentUser.role !== "SUPERADMIN") {
+    redirectWithNotice(path, "Data superadmin tidak dapat diakses.", "error");
+  }
+}
+
 async function assertActiveAccount(
   accountId: string,
   path: string,
@@ -291,6 +383,25 @@ async function assertActiveAccount(
   });
   if (!account) {
     redirectWithNotice(path, "Akun yang dipilih tidak tersedia atau tidak sesuai jenisnya.", "error");
+  }
+}
+
+async function assertActiveRole(role: string, path: string) {
+  const existing = await prisma.role.findFirst({
+    where: { code: role, active: true, deletedAt: null },
+    select: { code: true },
+  });
+
+  if (!existing) {
+    redirectWithNotice(path, "Role yang dipilih tidak tersedia atau sudah nonaktif.", "error");
+  }
+}
+
+async function assertExpenseCategoryAccess(role: string, categoryIds: string[], path: string) {
+  const uniqueCategoryIds = [...new Set(categoryIds)];
+  const checks = await Promise.all(uniqueCategoryIds.map((categoryId) => canAccessExpenseCategory(role, categoryId)));
+  if (checks.some((allowed) => !allowed)) {
+    redirectWithNotice(path, "Anda tidak memiliki akses ke salah satu kategori pengeluaran yang dipilih.", "error");
   }
 }
 
@@ -317,6 +428,7 @@ export async function loginAction(formData: FormData) {
     password: getText(formData, "password"),
   });
   if (!parsed.success) {
+    await logActivity(null, "LOGIN_FAILED", "Auth", null, null, { reason: "VALIDATION_FAILED" });
     redirect("/login?error=1");
   }
 
@@ -325,20 +437,24 @@ export async function loginAction(formData: FormData) {
   });
 
   if (!user || !verifyPassword(parsed.data.password, user.passwordHash)) {
+    await logActivity(null, "LOGIN_FAILED", "Auth", null, null, { username: parsed.data.email });
     redirect("/login?error=1");
   }
 
   await createSession(user.id);
+  await logActivity(user, "LOGIN", "Auth", user.id, null, { email: user.email, role: user.role });
   redirect("/dashboard");
 }
 
 export async function logoutAction() {
+  const user = await getCurrentUser();
+  await logActivity(user, "LOGOUT", "Auth", user?.id, { email: user?.email, role: user?.role }, null);
   await clearSession();
   redirect("/login");
 }
 
 export async function createClassRoom(formData: FormData) {
-  await assertPermission(PermissionKey.MASTER_CLASS);
+  const currentUser = await assertPermission(PermissionKey.MASTER_CLASS);
   const parsed = parseWithNotice(classRoomSchema, {
     name: getText(formData, "name"),
     level: getText(formData, "level"),
@@ -349,14 +465,16 @@ export async function createClassRoom(formData: FormData) {
   if (existing && !existing.deletedAt) {
     redirectWithNotice("/master/kelas", "Nama kelas sudah digunakan.", "error");
   }
+  let saved;
   if (existing) {
-    await prisma.classRoom.update({
+    saved = await prisma.classRoom.update({
       where: { id: existing.id },
       data: { ...parsed, active: true, deletedAt: null },
     });
   } else {
-    await prisma.classRoom.create({ data: parsed });
+    saved = await prisma.classRoom.create({ data: parsed });
   }
+  await logActivity(currentUser, existing ? "RESTORE" : "CREATE", "ClassRoom", saved.id, existing, saved);
 
   revalidatePath("/master/kelas");
   revalidatePath("/master/siswa");
@@ -364,7 +482,7 @@ export async function createClassRoom(formData: FormData) {
 }
 
 export async function createPaymentCategory(formData: FormData) {
-  await assertPermission(PermissionKey.MASTER_PAYMENT);
+  const currentUser = await assertPermission(PermissionKey.MASTER_PAYMENT);
   const parsed = parseWithNotice(categorySchema, {
     code: getText(formData, "code"),
     name: getText(formData, "name"),
@@ -392,11 +510,13 @@ export async function createPaymentCategory(formData: FormData) {
     active: true,
     deletedAt: null,
   };
+  let saved;
   if (existing) {
-    await prisma.paymentCategory.update({ where: { id: existing.id }, data });
+    saved = await prisma.paymentCategory.update({ where: { id: existing.id }, data });
   } else {
-    await prisma.paymentCategory.create({ data });
+    saved = await prisma.paymentCategory.create({ data });
   }
+  await logActivity(currentUser, existing ? "RESTORE" : "CREATE", "PaymentCategory", saved.id, existing, saved);
 
   revalidatePath("/master/jenis-pembayaran");
   revalidatePath("/transaksi/tagihan");
@@ -404,7 +524,7 @@ export async function createPaymentCategory(formData: FormData) {
 }
 
 export async function createUser(formData: FormData) {
-  await assertPermission(PermissionKey.USER_MANAGE);
+  const currentUser = await assertPermission(PermissionKey.USER_MANAGE);
 
   const parsed = parseWithNotice(userSchema, {
     name: getText(formData, "name"),
@@ -412,13 +532,16 @@ export async function createUser(formData: FormData) {
     password: getText(formData, "password"),
     role: getText(formData, "role"),
   }, "/master/pengguna");
+  assertCanManageSuperadmin(currentUser, parsed.role);
+  await assertActiveRole(parsed.role, "/master/pengguna");
 
   const existing = await prisma.user.findUnique({ where: { email: parsed.email } });
   if (existing && !existing.deletedAt) {
     redirectWithNotice("/master/pengguna", "Email sudah digunakan oleh pengguna lain.", "error");
   }
+  let saved;
   if (existing) {
-    await prisma.user.update({
+    saved = await prisma.user.update({
       where: { id: existing.id },
       data: {
         name: parsed.name,
@@ -429,7 +552,7 @@ export async function createUser(formData: FormData) {
       },
     });
   } else {
-    await prisma.user.create({
+    saved = await prisma.user.create({
       data: {
         name: parsed.name,
         email: parsed.email,
@@ -438,13 +561,14 @@ export async function createUser(formData: FormData) {
       },
     });
   }
+  await logActivity(currentUser, existing ? "RESTORE" : "CREATE", "User", saved.id, existing, saved);
 
   revalidatePath("/master/pengguna");
   redirectWithNotice("/master/pengguna", "Data pengguna berhasil disimpan.");
 }
 
 export async function createStudent(formData: FormData) {
-  await assertPermission(PermissionKey.MASTER_STUDENT);
+  const currentUser = await assertPermission(PermissionKey.MASTER_STUDENT);
   const parsed = studentSchema.safeParse({
     nisn: getText(formData, "nisn"),
     name: getText(formData, "name"),
@@ -474,8 +598,9 @@ export async function createStudent(formData: FormData) {
     redirectWithNotice(returnPath, "NISN sudah terdaftar. Gunakan NISN lain.", "error");
   }
 
+  let saved;
   if (existing?.deletedAt) {
-    await prisma.student.update({
+    saved = await prisma.student.update({
       where: { id: existing.id },
       data: {
         ...parsed.data,
@@ -486,7 +611,7 @@ export async function createStudent(formData: FormData) {
       },
     });
   } else {
-    await prisma.student.create({
+    saved = await prisma.student.create({
       data: {
         ...parsed.data,
         promotionStatus: parsed.data.promotionStatus || "BELUM_DITENTUKAN",
@@ -495,6 +620,7 @@ export async function createStudent(formData: FormData) {
       },
     });
   }
+  await logActivity(currentUser, existing?.deletedAt ? "RESTORE" : "CREATE", "Student", saved.id, existing, saved);
 
   revalidatePath("/master/siswa");
   revalidatePath("/dashboard");
@@ -502,7 +628,7 @@ export async function createStudent(formData: FormData) {
 }
 
 export async function createInvoice(formData: FormData) {
-  await assertPermission(PermissionKey.INVOICE_MANAGE);
+  const currentUser = await assertPermission(PermissionKey.INVOICE_MANAGE);
   const parsed = parseWithNotice(invoiceSchema, {
     studentId: getText(formData, "studentId"),
     paymentCategoryId: getText(formData, "paymentCategoryId"),
@@ -534,13 +660,14 @@ export async function createInvoice(formData: FormData) {
     );
   }
 
-  await prisma.invoice.create({
+  const saved = await prisma.invoice.create({
     data: {
       ...parsed,
       type: category.code,
       status: InvoiceStatus.BELUM_BAYAR,
     },
   });
+  await logActivity(currentUser, "CREATE", "Invoice", saved.id, null, saved);
 
   revalidatePath("/transaksi/tagihan");
   revalidatePath("/dashboard");
@@ -601,7 +728,7 @@ export async function createBulkInvoices(formData: FormData) {
     );
   }
 
-  await prisma.$transaction(async (tx) => {
+  const bulkResult = await prisma.$transaction(async (tx) => {
     const batch = await tx.billingBatch.create({
       data: {
         title: parsed.title,
@@ -631,7 +758,14 @@ export async function createBulkInvoices(formData: FormData) {
         description: parsed.description,
       })),
     });
+    return {
+      batch,
+      invoiceCount: targetStudents.length,
+      skippedDuplicateCount: alreadyBilled.size,
+      studentIds: targetStudents.map((student) => student.id),
+    };
   });
+  await logActivity(currentUser, "CREATE", "BillingBatch", bulkResult.batch.id, null, bulkResult);
 
   revalidatePath("/transaksi/tagihan");
   revalidatePath("/master/siswa");
@@ -645,14 +779,18 @@ export async function createBulkInvoices(formData: FormData) {
 
 export async function recordPayment(formData: FormData) {
   const currentUser = await assertPermission(PermissionKey.PAYMENT_MANAGE);
-  const parsed = parseWithNotice(paymentSchema, {
-    invoiceId: getText(formData, "invoiceId"),
+  const invoiceIds = getTexts(formData, "invoiceId");
+  const amounts = getTexts(formData, "amount");
+  const parsed = parseWithNotice(paymentBatchSchema, {
     assetAccountId: getText(formData, "assetAccountId"),
-    amount: getText(formData, "amount"),
     paidAt: getText(formData, "paidAt"),
     method: getText(formData, "method"),
     note: getText(formData, "note"),
-    receivedBy: getText(formData, "receivedBy"),
+    receivedBy: currentUser.name,
+    lines: invoiceIds.map((invoiceId, index) => ({
+      invoiceId,
+      amount: amounts[index] ?? "",
+    })),
   }, "/transaksi/pembayaran");
   await assertActiveAccount(
     parsed.assetAccountId,
@@ -660,47 +798,76 @@ export async function recordPayment(formData: FormData) {
     AccountType.ASET,
   );
 
-  const invoiceBeforePayment = await prisma.invoice.findUnique({
-    where: { id: parsed.invoiceId },
+  const invoiceIdSet = new Set(parsed.lines.map((line) => line.invoiceId));
+  if (invoiceIdSet.size !== parsed.lines.length) {
+    redirectWithNotice("/transaksi/pembayaran", "Tagihan yang sama tidak boleh dipilih lebih dari sekali.", "error");
+  }
+
+  const invoicesBeforePayment = await prisma.invoice.findMany({
+    where: { id: { in: [...invoiceIdSet] }, deletedAt: null },
     include: { student: true, payments: { where: { deletedAt: null }, select: { amount: true } } },
   });
 
-  if (!invoiceBeforePayment) {
+  if (invoicesBeforePayment.length !== parsed.lines.length) {
     redirectWithNotice("/transaksi/pembayaran", "Tagihan tidak ditemukan.", "error");
   }
 
-  const paidBefore = invoiceBeforePayment.payments.reduce((total, payment) => total + payment.amount, 0);
-  const remainingBefore = Math.max(invoiceBeforePayment.amount - paidBefore, 0);
-
-  if (parsed.amount > remainingBefore) {
-    redirectWithNotice(
-      "/transaksi/pembayaran",
-      "Nominal pembayaran melebihi sisa tagihan.",
-      "error",
-    );
+  const studentIds = new Set(invoicesBeforePayment.map((invoice) => invoice.studentId));
+  if (studentIds.size !== 1) {
+    redirectWithNotice("/transaksi/pembayaran", "Satu kwitansi hanya boleh berisi tagihan dari satu siswa.", "error");
   }
 
-  const { assetAccountId, ...paymentData } = parsed;
-  const payment = await prisma.$transaction(async (tx) => {
-    const created = await tx.payment.create({
-      data: {
-        ...paymentData,
-        receiptNo: receiptNumber(),
-        receivedBy: currentUser.name,
-      },
-    });
+  const invoicesById = new Map(invoicesBeforePayment.map((invoice) => [invoice.id, invoice]));
+  for (const line of parsed.lines) {
+    const invoice = invoicesById.get(line.invoiceId);
+    const paidBefore = invoice?.payments.reduce((total, payment) => total + payment.amount, 0) ?? 0;
+    const remainingBefore = Math.max((invoice?.amount ?? 0) - paidBefore, 0);
+    if (line.amount > remainingBefore) {
+      redirectWithNotice(
+        "/transaksi/pembayaran",
+        `Nominal pembayaran untuk ${invoice?.title ?? "tagihan"} melebihi sisa tagihan.`,
+        "error",
+      );
+    }
+  }
 
-    await recalculateInvoiceStatus(tx, parsed.invoiceId);
-    await postPaymentAccounting(tx, {
-      paymentId: created.id,
-      invoiceId: parsed.invoiceId,
-      assetAccountId,
-      amount: created.amount,
-      date: created.paidAt,
-      description: `Pembayaran ${invoiceBeforePayment.title} - ${invoiceBeforePayment.student.name}`,
-      createdBy: currentUser.name,
-    });
-    return created;
+  const receiptNo = receiptNumber();
+  const createdPayments = await prisma.$transaction(async (tx) => {
+    const createdPayments = [];
+    for (const line of parsed.lines) {
+      const invoice = invoicesById.get(line.invoiceId)!;
+      const created = await tx.payment.create({
+        data: {
+          invoiceId: line.invoiceId,
+          amount: line.amount,
+          paidAt: parsed.paidAt,
+          method: parsed.method,
+          note: parsed.note,
+          receiptNo,
+          receivedBy: currentUser.name,
+        },
+      });
+
+      await recalculateInvoiceStatus(tx, line.invoiceId);
+      await postPaymentAccounting(tx, {
+        paymentId: created.id,
+        invoiceId: line.invoiceId,
+        assetAccountId: parsed.assetAccountId,
+        amount: created.amount,
+        date: created.paidAt,
+        description: `Pembayaran ${invoice.title} - ${invoice.student.name}`,
+        createdBy: currentUser.name,
+      });
+      createdPayments.push(created);
+    }
+    return createdPayments;
+  });
+  const firstPayment = createdPayments[0];
+  await logActivity(currentUser, "CREATE", "PaymentReceipt", receiptNo, null, {
+    receiptNo,
+    payments: createdPayments,
+    invoicesBeforePayment,
+    assetAccountId: parsed.assetAccountId,
   });
 
   revalidatePath("/transaksi/pembayaran");
@@ -709,57 +876,82 @@ export async function recordPayment(formData: FormData) {
   revalidatePath("/laporan");
   revalidatePath("/buku-kas");
   revalidatePath("/akuntansi");
-  redirect(`/kwitansi/${payment.id}?new=1`);
+  redirect(`/kwitansi/${firstPayment.id}?new=1`);
 }
 
 export async function createExpense(formData: FormData) {
   const currentUser = await assertPermission(PermissionKey.EXPENSE_MANAGE);
-  const parsed = parseWithNotice(expenseSchema, {
-    categoryId: getText(formData, "categoryId"),
+  const returnPath = expenseReturnPath(formData);
+  const categoryIds = getTexts(formData, "categoryId");
+  const titles = getTexts(formData, "title");
+  const amounts = getTexts(formData, "amount");
+  const vendors = formData.getAll("vendor").map((value) => (typeof value === "string" ? value.trim() : ""));
+  const notes = formData.getAll("note").map((value) => (typeof value === "string" ? value.trim() : ""));
+  const parsed = parseWithNotice(expenseBatchSchema, {
     assetAccountId: getText(formData, "assetAccountId"),
-    title: getText(formData, "title"),
-    amount: getText(formData, "amount"),
     spentAt: getText(formData, "spentAt"),
-    vendor: getText(formData, "vendor"),
-    note: getText(formData, "note"),
-    createdBy: getText(formData, "createdBy"),
-  }, "/transaksi/pengeluaran");
+    createdBy: currentUser.name,
+    lines: categoryIds.map((categoryId, index) => ({
+      categoryId,
+      title: titles[index] ?? "",
+      amount: amounts[index] ?? "",
+      vendor: vendors[index] ?? "",
+      note: notes[index] ?? "",
+    })),
+  }, returnPath);
   await assertActiveAccount(
     parsed.assetAccountId,
-    "/transaksi/pengeluaran",
+    returnPath,
     AccountType.ASET,
   );
-  const category = await prisma.expenseCategory.findUniqueOrThrow({
-    where: { id: parsed.categoryId },
+  await assertExpenseCategoryAccess(currentUser.role, parsed.lines.map((line) => line.categoryId), returnPath);
+  const categories = await prisma.expenseCategory.findMany({
+    where: {
+      id: { in: [...new Set(parsed.lines.map((line) => line.categoryId))] },
+      active: true,
+      deletedAt: null,
+    },
   });
-  const {
-    assetAccountId,
-    categoryId,
-    title,
-    amount,
-    spentAt,
-    vendor,
-    note,
-  } = parsed;
-  const expenseData = { categoryId, title, amount, spentAt, vendor, note };
+  if (categories.length !== new Set(parsed.lines.map((line) => line.categoryId)).size) {
+    redirectWithNotice(returnPath, "Kategori pengeluaran tidak ditemukan atau sudah nonaktif.", "error");
+  }
+  const categoriesById = new Map(categories.map((category) => [category.id, category]));
+  const receiptNo = expenseReceiptNumber();
 
-  await prisma.$transaction(async (tx) => {
-    const expense = await tx.expense.create({
-      data: {
-        ...expenseData,
-        categoryNameSnapshot: category.name,
+  const createdExpenses = await prisma.$transaction(async (tx) => {
+    const createdItems = [];
+    for (const line of parsed.lines) {
+      const category = categoriesById.get(line.categoryId)!;
+      const expense = await tx.expense.create({
+        data: {
+          receiptNo,
+          categoryId: line.categoryId,
+          categoryNameSnapshot: category.name,
+          title: line.title,
+          amount: line.amount,
+          spentAt: parsed.spentAt,
+          vendor: line.vendor,
+          note: line.note,
+          createdBy: currentUser.name,
+        },
+      });
+      await postExpenseAccounting(tx, {
+        expenseId: expense.id,
+        assetAccountId: parsed.assetAccountId,
+        amount: expense.amount,
+        date: expense.spentAt,
+        description: `Pengeluaran ${expense.title}`,
         createdBy: currentUser.name,
-      },
-    });
-    await postExpenseAccounting(tx, {
-      expenseId: expense.id,
-      assetAccountId,
-      amount: expense.amount,
-      date: expense.spentAt,
-      description: `Pengeluaran ${expense.title}`,
-      createdBy: currentUser.name,
-      expenseAccountId: category.expenseAccountId,
-    });
+        expenseAccountId: category.expenseAccountId,
+      });
+      createdItems.push(expense);
+    }
+    return createdItems;
+  });
+  await logActivity(currentUser, "CREATE", "ExpenseReceipt", receiptNo, null, {
+    receiptNo,
+    expenses: createdExpenses,
+    assetAccountId: parsed.assetAccountId,
   });
 
   revalidatePath("/transaksi/pengeluaran");
@@ -767,7 +959,7 @@ export async function createExpense(formData: FormData) {
   revalidatePath("/laporan");
   revalidatePath("/buku-kas");
   revalidatePath("/akuntansi");
-  redirectWithNotice("/transaksi/pengeluaran", "Pengeluaran berhasil disimpan.");
+  redirectWithNotice(returnPath, `${parsed.lines.length} pengeluaran berhasil disimpan dalam satu nota.`);
 }
 
 export async function ensureAuthenticated() {
@@ -776,7 +968,7 @@ export async function ensureAuthenticated() {
 }
 
 export async function updateClassRoom(formData: FormData) {
-  await assertPermission(PermissionKey.MASTER_CLASS);
+  const currentUser = await assertPermission(PermissionKey.MASTER_CLASS);
   const id = getText(formData, "id");
   const parsed = parseWithNotice(classRoomSchema, {
     name: getText(formData, "name"),
@@ -789,19 +981,24 @@ export async function updateClassRoom(formData: FormData) {
   if (duplicate) {
     redirectWithNotice("/master/kelas", "Nama kelas sudah digunakan.", "error");
   }
-  await prisma.$transaction(async (tx) => {
-    await tx.classRoom.update({ where: { id }, data: parsed });
+  const before = await prisma.classRoom.findUniqueOrThrow({ where: { id } });
+  const after = await prisma.$transaction(async (tx) => {
+    const updated = await tx.classRoom.update({ where: { id }, data: parsed });
     await tx.student.updateMany({ where: { classRoomId: id }, data: { classNameSnapshot: parsed.name } });
+    return updated;
   });
+  await logActivity(currentUser, "UPDATE", "ClassRoom", id, before, after);
   redirectWithNotice("/master/kelas", "Data kelas berhasil diubah.");
 }
 
 export async function deleteClassRoom(formData: FormData) {
-  await assertPermission(PermissionKey.MASTER_CLASS);
+  const currentUser = await assertPermission(PermissionKey.MASTER_CLASS);
   const id = getText(formData, "id");
   const students = await prisma.student.count({ where: { classRoomId: id, deletedAt: null } });
   if (students) redirectWithNotice("/master/kelas", "Kelas masih memiliki siswa dan tidak dapat dihapus.", "error");
-  await prisma.classRoom.update({ where: { id }, data: { active: false, deletedAt: new Date() } });
+  const before = await prisma.classRoom.findUniqueOrThrow({ where: { id } });
+  const after = await prisma.classRoom.update({ where: { id }, data: { active: false, deletedAt: new Date() } });
+  await logActivity(currentUser, "DELETE", "ClassRoom", id, before, after);
   redirectWithNotice("/master/kelas", "Data kelas berhasil dihapus.");
 }
 
@@ -863,6 +1060,12 @@ export async function promoteClassStudents(formData: FormData) {
         : { classRoomId: target!.id, classNameSnapshot: target!.name, promotionStatus: parsed.decisionStatus || "NAIK" },
     });
   });
+  await logActivity(currentUser, "UPDATE", "StudentClassPromotion", source.id, null, {
+    source,
+    target,
+    studentIds: students.map((student) => student.id),
+    ...parsed,
+  });
 
   revalidatePath("/master/kelas");
   revalidatePath("/master/siswa");
@@ -875,7 +1078,7 @@ export async function promoteClassStudents(formData: FormData) {
 }
 
 export async function updatePaymentCategory(formData: FormData) {
-  await assertPermission(PermissionKey.MASTER_PAYMENT);
+  const currentUser = await assertPermission(PermissionKey.MASTER_PAYMENT);
   const id = getText(formData, "id");
   const parsed = parseWithNotice(categorySchema, {
     code: getText(formData, "code"),
@@ -889,21 +1092,26 @@ export async function updatePaymentCategory(formData: FormData) {
     "/master/jenis-pembayaran",
     AccountType.PENDAPATAN,
   );
-  await prisma.paymentCategory.update({
+  const before = await prisma.paymentCategory.findUniqueOrThrow({ where: { id } });
+  const after = await prisma.paymentCategory.update({
     where: { id },
     data: { ...parsed, revenueAccountId: parsed.revenueAccountId || null },
   });
+  await logActivity(currentUser, "UPDATE", "PaymentCategory", id, before, after);
   redirectWithNotice("/master/jenis-pembayaran", "Jenis pembayaran berhasil diubah.");
 }
 
 export async function deletePaymentCategory(formData: FormData) {
-  await assertPermission(PermissionKey.MASTER_PAYMENT);
-  await prisma.paymentCategory.update({ where: { id: getText(formData, "id") }, data: { active: false, deletedAt: new Date() } });
+  const currentUser = await assertPermission(PermissionKey.MASTER_PAYMENT);
+  const id = getText(formData, "id");
+  const before = await prisma.paymentCategory.findUniqueOrThrow({ where: { id } });
+  const after = await prisma.paymentCategory.update({ where: { id }, data: { active: false, deletedAt: new Date() } });
+  await logActivity(currentUser, "DELETE", "PaymentCategory", id, before, after);
   redirectWithNotice("/master/jenis-pembayaran", "Jenis pembayaran berhasil dihapus.");
 }
 
 export async function createExpenseCategory(formData: FormData) {
-  await assertPermission(PermissionKey.MASTER_EXPENSE_CATEGORY);
+  const currentUser = await assertPermission(PermissionKey.MASTER_EXPENSE_CATEGORY);
   const parsed = parseWithNotice(expenseCategorySchema, {
     code: getText(formData, "code"),
     name: getText(formData, "name"),
@@ -933,18 +1141,20 @@ export async function createExpenseCategory(formData: FormData) {
     deletedAt: null,
     active: true,
   };
+  let saved;
   if (existing) {
-    await prisma.expenseCategory.update({ where: { id: existing.id }, data });
+    saved = await prisma.expenseCategory.update({ where: { id: existing.id }, data });
   } else {
-    await prisma.expenseCategory.create({ data });
+    saved = await prisma.expenseCategory.create({ data });
   }
+  await logActivity(currentUser, existing ? "RESTORE" : "CREATE", "ExpenseCategory", saved.id, existing, saved);
   revalidatePath("/master/kategori-pengeluaran");
   revalidatePath("/transaksi/pengeluaran");
   redirectWithNotice("/master/kategori-pengeluaran", "Kategori pengeluaran berhasil ditambahkan.");
 }
 
 export async function updateExpenseCategory(formData: FormData) {
-  await assertPermission(PermissionKey.MASTER_EXPENSE_CATEGORY);
+  const currentUser = await assertPermission(PermissionKey.MASTER_EXPENSE_CATEGORY);
   const parsed = parseWithNotice(expenseCategorySchema, {
     code: getText(formData, "code"),
     name: getText(formData, "name"),
@@ -971,7 +1181,8 @@ export async function updateExpenseCategory(formData: FormData) {
       "error",
     );
   }
-  await prisma.expenseCategory.update({
+  const before = await prisma.expenseCategory.findUniqueOrThrow({ where: { id } });
+  const after = await prisma.expenseCategory.update({
     where: { id },
     data: {
       ...parsed,
@@ -979,13 +1190,14 @@ export async function updateExpenseCategory(formData: FormData) {
       active: getText(formData, "active") === "true",
     },
   });
+  await logActivity(currentUser, "UPDATE", "ExpenseCategory", id, before, after);
   revalidatePath("/master/kategori-pengeluaran");
   revalidatePath("/transaksi/pengeluaran");
   redirectWithNotice("/master/kategori-pengeluaran", "Kategori pengeluaran berhasil diubah.");
 }
 
 export async function deleteExpenseCategory(formData: FormData) {
-  await assertPermission(PermissionKey.MASTER_EXPENSE_CATEGORY);
+  const currentUser = await assertPermission(PermissionKey.MASTER_EXPENSE_CATEGORY);
   const id = getText(formData, "id");
   const used = await prisma.expense.count({ where: { categoryId: id, deletedAt: null } });
   if (used) {
@@ -995,12 +1207,14 @@ export async function deleteExpenseCategory(formData: FormData) {
       "error",
     );
   }
-  await prisma.expenseCategory.update({ where: { id }, data: { active: false, deletedAt: new Date() } });
+  const before = await prisma.expenseCategory.findUniqueOrThrow({ where: { id } });
+  const after = await prisma.expenseCategory.update({ where: { id }, data: { active: false, deletedAt: new Date() } });
+  await logActivity(currentUser, "DELETE", "ExpenseCategory", id, before, after);
   redirectWithNotice("/master/kategori-pengeluaran", "Kategori pengeluaran berhasil dihapus.");
 }
 
 export async function updateUser(formData: FormData) {
-  await assertPermission(PermissionKey.USER_MANAGE);
+  const currentUser = await assertPermission(PermissionKey.USER_MANAGE);
   const id = getText(formData, "id");
   const parsed = parseWithNotice(userUpdateSchema, {
     name: getText(formData, "name"),
@@ -1008,6 +1222,10 @@ export async function updateUser(formData: FormData) {
     password: getText(formData, "password"),
     role: getText(formData, "role"),
   }, "/master/pengguna");
+  assertCanManageSuperadmin(currentUser, parsed.role);
+  await assertActiveRole(parsed.role, "/master/pengguna");
+  const before = await prisma.user.findUniqueOrThrow({ where: { id } });
+  assertCanManageSuperadmin(currentUser, before.role);
   const data = {
     name: parsed.name,
     email: parsed.email,
@@ -1021,7 +1239,8 @@ export async function updateUser(formData: FormData) {
   if (duplicate) {
     redirectWithNotice("/master/pengguna", "Email sudah digunakan oleh pengguna lain.", "error");
   }
-  await prisma.user.update({ where: { id }, data });
+  const after = await prisma.user.update({ where: { id }, data });
+  await logActivity(currentUser, "UPDATE", "User", id, before, after);
   redirectWithNotice("/master/pengguna", "Pengguna berhasil diubah.");
 }
 
@@ -1029,33 +1248,156 @@ export async function deleteUser(formData: FormData) {
   const currentUser = await assertPermission(PermissionKey.USER_MANAGE);
   const id = getText(formData, "id");
   if (id === currentUser.id) redirectWithNotice("/master/pengguna", "Akun yang sedang digunakan tidak dapat dihapus.", "error");
-  await prisma.user.update({ where: { id }, data: { active: false, deletedAt: new Date() } });
+  const before = await prisma.user.findUniqueOrThrow({ where: { id } });
+  assertCanManageSuperadmin(currentUser, before.role);
+  const after = await prisma.user.update({ where: { id }, data: { active: false, deletedAt: new Date() } });
+  await logActivity(currentUser, "DELETE", "User", id, before, after);
   redirectWithNotice("/master/pengguna", "Pengguna berhasil dihapus.");
 }
 
+export async function createRole(formData: FormData) {
+  const currentUser = await assertPermission(PermissionKey.ROLE_MANAGE);
+  const parsed = parseWithNotice(roleSchema, {
+    name: getText(formData, "name"),
+  }, "/master/pengguna");
+  const code = normalizeRoleCode(parsed.name);
+  assertCanManageSuperadmin(currentUser, code);
+
+  if (!code) {
+    redirectWithNotice("/master/pengguna", "Kode role belum valid.", "error");
+  }
+
+  const existing = await prisma.role.findUnique({ where: { code } });
+  if (existing && !existing.deletedAt) {
+    redirectWithNotice("/master/pengguna", "Role dengan kode tersebut sudah ada.", "error");
+  }
+
+  let saved;
+  if (existing) {
+    saved = await prisma.role.update({
+      where: { id: existing.id },
+      data: {
+        name: parsed.name,
+        active: true,
+        deletedAt: null,
+      },
+    });
+  } else {
+    saved = await prisma.role.create({ data: { code, name: parsed.name } });
+  }
+  await logActivity(currentUser, existing ? "RESTORE" : "CREATE", "Role", saved.id, existing, saved);
+
+  revalidatePath("/master/pengguna");
+  revalidatePath("/", "layout");
+  redirectWithNotice("/master/pengguna", "Role berhasil ditambahkan.");
+}
+
+export async function updateRole(formData: FormData) {
+  const currentUser = await assertPermission(PermissionKey.ROLE_MANAGE);
+  const parsed = parseWithNotice(roleUpdateSchema, {
+    id: getText(formData, "id"),
+    name: getText(formData, "name"),
+    active: getText(formData, "active"),
+  }, "/master/pengguna");
+  const role = await prisma.role.findUniqueOrThrow({ where: { id: parsed.id } });
+  assertCanManageSuperadmin(currentUser, role.code);
+  if (role.code === "ADMIN" && !parsed.active) {
+    redirectWithNotice("/master/pengguna", "Role Administrator tidak boleh dinonaktifkan.", "error");
+  }
+  if (role.code === "SUPERADMIN" && !parsed.active) {
+    redirectWithNotice("/master/pengguna", "Role Superadmin tidak boleh dinonaktifkan.", "error");
+  }
+  const after = await prisma.role.update({
+    where: { id: parsed.id },
+    data: {
+      name: parsed.name,
+      active: parsed.active,
+      deletedAt: null,
+    },
+  });
+  await logActivity(currentUser, "UPDATE", "Role", role.id, role, after);
+  revalidatePath("/master/pengguna");
+  revalidatePath("/", "layout");
+  redirectWithNotice("/master/pengguna", "Role berhasil diubah.");
+}
+
+export async function deleteRole(formData: FormData) {
+  const currentUser = await assertPermission(PermissionKey.ROLE_MANAGE);
+  const id = getText(formData, "id");
+  const role = await prisma.role.findUniqueOrThrow({ where: { id } });
+  assertCanManageSuperadmin(currentUser, role.code);
+  if (role.code === "ADMIN") {
+    redirectWithNotice("/master/pengguna", "Role Administrator tidak boleh dihapus.", "error");
+  }
+  if (role.code === "SUPERADMIN") {
+    redirectWithNotice("/master/pengguna", "Role Superadmin tidak boleh dihapus.", "error");
+  }
+  const used = await prisma.user.count({ where: { role: role.code, deletedAt: null } });
+  if (used) {
+    redirectWithNotice("/master/pengguna", "Role masih dipakai pengguna. Pindahkan pengguna ke role lain dulu.", "error");
+  }
+  const after = await prisma.role.update({ where: { id }, data: { active: false, deletedAt: new Date() } });
+  await logActivity(currentUser, "DELETE", "Role", id, role, after);
+  revalidatePath("/master/pengguna");
+  revalidatePath("/", "layout");
+  redirectWithNotice("/master/pengguna", "Role berhasil dihapus.");
+}
+
 export async function updateRolePermissions(formData: FormData) {
-  await assertPermission(PermissionKey.ROLE_MANAGE);
+  const currentUser = await assertPermission(PermissionKey.ROLE_MANAGE);
   const role = parseWithNotice(
-    z.nativeEnum(UserRole),
+    z.string().min(1),
     getText(formData, "role"),
     "/master/pengguna",
   );
   const selected = new Set(formData.getAll("permissions").filter((value): value is string => typeof value === "string"));
+  const selectedExpenseCategories = new Set(formData.getAll("expenseCategoryIds").filter((value): value is string => typeof value === "string"));
+  const roleRecord = await prisma.role.findFirst({ where: { code: role, deletedAt: null } });
+  if (!roleRecord) {
+    redirectWithNotice("/master/pengguna", "Role tidak ditemukan.", "error");
+  }
+  assertCanManageSuperadmin(currentUser, role);
+  const permissionsBefore = await prisma.rolePermission.findMany({ where: { role } });
+  const expensePermissionsBefore = await prisma.roleExpenseCategoryPermission.findMany({ where: { role } });
+  const expenseCategories = await prisma.expenseCategory.findMany({
+    where: { active: true, deletedAt: null },
+    select: { id: true },
+  });
   await prisma.$transaction(
-    Object.values(PermissionKey).map((permission) =>
-      prisma.rolePermission.upsert({
-        where: { role_permission: { role, permission } },
-        create: { role, permission, allowed: selected.has(permission) },
-        update: { allowed: selected.has(permission) },
-      }),
-    ),
+    [
+      ...Object.values(PermissionKey).map((permission) =>
+        prisma.rolePermission.upsert({
+          where: { role_permission: { role, permission } },
+          create: { role, permission, allowed: selected.has(permission) },
+          update: { allowed: selected.has(permission) },
+        }),
+      ),
+      ...expenseCategories.map((category) =>
+        prisma.roleExpenseCategoryPermission.upsert({
+          where: { role_expenseCategoryId: { role, expenseCategoryId: category.id } },
+          create: { role, expenseCategoryId: category.id, allowed: selectedExpenseCategories.has(category.id) },
+          update: { allowed: selectedExpenseCategories.has(category.id) },
+        }),
+      ),
+    ],
   );
+  const [permissionsAfter, expensePermissionsAfter] = await Promise.all([
+    prisma.rolePermission.findMany({ where: { role } }),
+    prisma.roleExpenseCategoryPermission.findMany({ where: { role } }),
+  ]);
+  await logActivity(currentUser, "UPDATE", "RolePermissions", roleRecord.id, {
+    permissions: permissionsBefore,
+    expenseCategories: expensePermissionsBefore,
+  }, {
+    permissions: permissionsAfter,
+    expenseCategories: expensePermissionsAfter,
+  });
   revalidatePath("/", "layout");
-  redirectWithNotice("/master/pengguna", `Hak akses ${role.replaceAll("_", " ")} berhasil diperbarui.`);
+  redirectWithNotice("/master/pengguna", `Hak akses ${roleRecord.name} berhasil diperbarui.`);
 }
 
 export async function updateStudent(formData: FormData) {
-  await assertPermission(PermissionKey.MASTER_STUDENT);
+  const currentUser = await assertPermission(PermissionKey.MASTER_STUDENT);
   const id = getText(formData, "id");
   const returnPath = studentReturnPath(formData);
   const parsed = studentProfileSchema.safeParse({
@@ -1076,25 +1418,29 @@ export async function updateStudent(formData: FormData) {
   if (duplicate) {
     redirectWithNotice(returnPath, "NISN sudah terdaftar. Gunakan NISN lain.", "error");
   }
-  await prisma.student.update({
+  const before = await prisma.student.findUniqueOrThrow({ where: { id } });
+  const after = await prisma.student.update({
     where: { id },
     data: parsed.data,
   });
+  await logActivity(currentUser, "UPDATE", "Student", id, before, after);
   revalidatePath("/master/siswa");
   redirectWithNotice(returnPath, "Data siswa berhasil diubah.");
 }
 
 export async function deleteStudent(formData: FormData) {
-  await assertPermission(PermissionKey.MASTER_STUDENT);
+  const currentUser = await assertPermission(PermissionKey.MASTER_STUDENT);
   const id = getText(formData, "id");
   const returnPath = studentReturnPath(formData);
-  await prisma.student.update({ where: { id }, data: { active: false, deletedAt: new Date() } });
+  const before = await prisma.student.findUniqueOrThrow({ where: { id } });
+  const after = await prisma.student.update({ where: { id }, data: { active: false, deletedAt: new Date() } });
+  await logActivity(currentUser, "DELETE", "Student", id, before, after);
   revalidatePath("/master/siswa");
   redirectWithNotice(returnPath, "Data siswa berhasil dihapus.");
 }
 
 export async function updateInvoice(formData: FormData) {
-  await assertPermission(PermissionKey.INVOICE_MANAGE);
+  const currentUser = await assertPermission(PermissionKey.INVOICE_MANAGE);
   const id = getText(formData, "id");
   const parsed = parseWithNotice(invoiceSchema, {
     studentId: getText(formData, "studentId"),
@@ -1112,7 +1458,6 @@ export async function updateInvoice(formData: FormData) {
   const [currentInvoice, paid] = await Promise.all([
     prisma.invoice.findUniqueOrThrow({
       where: { id },
-      select: { paymentCategoryId: true },
     }),
     prisma.payment.aggregate({ where: { invoiceId: id, deletedAt: null }, _sum: { amount: true } }),
   ]);
@@ -1144,26 +1489,34 @@ export async function updateInvoice(formData: FormData) {
       "error",
     );
   }
-  await prisma.$transaction(async (tx) => {
+  const after = await prisma.$transaction(async (tx) => {
     await tx.invoice.update({ where: { id }, data: { ...parsed, type: category.code } });
     await recalculateInvoiceStatus(tx, id);
+    return tx.invoice.findUniqueOrThrow({ where: { id } });
   });
+  await logActivity(currentUser, "UPDATE", "Invoice", id, currentInvoice, after);
   redirectWithNotice("/transaksi/tagihan", "Tagihan berhasil diubah.");
 }
 
 export async function deleteInvoice(formData: FormData) {
-  await assertPermission(PermissionKey.INVOICE_MANAGE);
+  const currentUser = await assertPermission(PermissionKey.INVOICE_MANAGE);
   const id = getText(formData, "id");
   const payments = await prisma.payment.count({ where: { invoiceId: id, deletedAt: null } });
   if (payments) redirectWithNotice("/transaksi/tagihan", "Tagihan yang sudah memiliki pembayaran tidak dapat dihapus.", "error");
-  await prisma.invoice.update({ where: { id }, data: { deletedAt: new Date() } });
+  const before = await prisma.invoice.findUniqueOrThrow({ where: { id } });
+  const after = await prisma.invoice.update({ where: { id }, data: { deletedAt: new Date() } });
+  await logActivity(currentUser, "DELETE", "Invoice", id, before, after);
   redirectWithNotice("/transaksi/tagihan", "Tagihan berhasil dihapus.");
 }
 
 export async function updatePayment(formData: FormData) {
-  await assertPermission(PermissionKey.PAYMENT_MANAGE);
+  const currentUser = await assertPermission(PermissionKey.PAYMENT_MANAGE);
   const id = getText(formData, "id");
-  const current = await prisma.payment.findUniqueOrThrow({ where: { id }, include: { invoice: true } });
+  const current = await prisma.payment.findUniqueOrThrow({ where: { id }, include: { invoice: true, cashEntry: true } });
+  const currentJournal = await prisma.journalEntry.findFirst({
+    where: { sourceType: "PAYMENT", sourceId: id },
+    include: { lines: true },
+  });
   const parsed = parseWithNotice(paymentUpdateSchema, {
     amount: getText(formData, "amount"),
     assetAccountId: getText(formData, "assetAccountId"),
@@ -1216,24 +1569,196 @@ export async function updatePayment(formData: FormData) {
     }
     await recalculateInvoiceStatus(tx, current.invoiceId);
   });
+  const after = await prisma.payment.findUniqueOrThrow({ where: { id }, include: { invoice: true, cashEntry: true } });
+  const afterJournal = await prisma.journalEntry.findFirst({
+    where: { sourceType: "PAYMENT", sourceId: id },
+    include: { lines: true },
+  });
+  await logActivity(currentUser, "UPDATE", "Payment", id, {
+    payment: current,
+    journal: currentJournal,
+  }, {
+    payment: after,
+    journal: afterJournal,
+  });
   redirectWithNotice("/transaksi/pembayaran", "Pembayaran berhasil diubah.");
 }
 
+export async function updatePaymentReceipt(formData: FormData) {
+  const currentUser = await assertPermission(PermissionKey.PAYMENT_MANAGE);
+  const parsed = parseWithNotice(paymentReceiptUpdateSchema, {
+    ids: getTexts(formData, "id"),
+    amounts: getTexts(formData, "amount"),
+    assetAccountId: getText(formData, "assetAccountId"),
+    paidAt: getText(formData, "paidAt"),
+    method: getText(formData, "method"),
+    note: getText(formData, "note"),
+  }, "/transaksi/pembayaran");
+  if (parsed.ids.length !== parsed.amounts.length) {
+    redirectWithNotice("/transaksi/pembayaran", "Jumlah item pembayaran tidak sesuai.", "error");
+  }
+  await assertActiveAccount(
+    parsed.assetAccountId,
+    "/transaksi/pembayaran",
+    AccountType.ASET,
+  );
+
+  const currentPayments = await prisma.payment.findMany({
+    where: { id: { in: parsed.ids }, deletedAt: null },
+    include: { invoice: true, cashEntry: true },
+  });
+  if (currentPayments.length !== parsed.ids.length) {
+    redirectWithNotice("/transaksi/pembayaran", "Pembayaran tidak ditemukan.", "error");
+  }
+  const receiptNumbers = new Set(currentPayments.map((payment) => payment.receiptNo ?? payment.id));
+  if (receiptNumbers.size !== 1) {
+    redirectWithNotice("/transaksi/pembayaran", "Item yang diedit bukan berasal dari kwitansi yang sama.", "error");
+  }
+  const journalsBefore = await prisma.journalEntry.findMany({
+    where: { sourceType: "PAYMENT", sourceId: { in: currentPayments.map((payment) => payment.id) } },
+    include: { lines: true },
+  });
+
+  const amountByPaymentId = new Map(parsed.ids.map((id, index) => [id, parsed.amounts[index]]));
+  for (const payment of currentPayments) {
+    const nextAmount = amountByPaymentId.get(payment.id) ?? 0;
+    const paidOther = await prisma.payment.aggregate({
+      where: { invoiceId: payment.invoiceId, deletedAt: null, NOT: { id: payment.id } },
+      _sum: { amount: true },
+    });
+    if ((paidOther._sum.amount ?? 0) + nextAmount > payment.invoice.amount) {
+      redirectWithNotice(
+        "/transaksi/pembayaran",
+        `Nominal pembayaran untuk ${payment.invoice.title} melebihi sisa tagihan.`,
+        "error",
+      );
+    }
+  }
+
+  await prisma.$transaction(async (tx) => {
+    for (const payment of currentPayments) {
+      const amount = amountByPaymentId.get(payment.id)!;
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: {
+          amount,
+          paidAt: parsed.paidAt,
+          method: parsed.method,
+          note: parsed.note,
+        },
+      });
+      const cashEntry = await tx.cashTransaction.findFirst({ where: { paymentId: payment.id, deletedAt: null } });
+      await tx.cashTransaction.updateMany({
+        where: { paymentId: payment.id },
+        data: { amount, date: parsed.paidAt, assetAccountId: parsed.assetAccountId },
+      });
+      const journal = await tx.journalEntry.findFirst({ where: { sourceType: "PAYMENT", sourceId: payment.id } });
+      if (journal) {
+        await tx.journalLine.updateMany({
+          where: { journalEntryId: journal.id, debit: { gt: 0 } },
+          data: { debit: amount, accountId: parsed.assetAccountId },
+        });
+        await tx.journalLine.updateMany({
+          where: { journalEntryId: journal.id, credit: { gt: 0 } },
+          data: {
+            credit: amount,
+            ...(cashEntry?.contraAccountId ? { accountId: cashEntry.contraAccountId } : {}),
+          },
+        });
+        await tx.journalEntry.update({ where: { id: journal.id }, data: { date: parsed.paidAt } });
+      }
+      await recalculateInvoiceStatus(tx, payment.invoiceId);
+    }
+  });
+  const paymentsAfter = await prisma.payment.findMany({
+    where: { id: { in: parsed.ids } },
+    include: { invoice: true, cashEntry: true },
+  });
+  const journalsAfter = await prisma.journalEntry.findMany({
+    where: { sourceType: "PAYMENT", sourceId: { in: currentPayments.map((payment) => payment.id) } },
+    include: { lines: true },
+  });
+  await logActivity(currentUser, "UPDATE", "PaymentReceipt", [...receiptNumbers][0], {
+    payments: currentPayments,
+    journals: journalsBefore,
+  }, {
+    payments: paymentsAfter,
+    journals: journalsAfter,
+  });
+  redirectWithNotice("/transaksi/pembayaran", "Kwitansi pembayaran berhasil diubah.");
+}
+
 export async function deletePayment(formData: FormData) {
-  await assertPermission(PermissionKey.PAYMENT_MANAGE);
+  const currentUser = await assertPermission(PermissionKey.PAYMENT_MANAGE);
   const id = getText(formData, "id");
-  const payment = await prisma.payment.findUniqueOrThrow({ where: { id } });
+  const payment = await prisma.payment.findUniqueOrThrow({ where: { id }, include: { cashEntry: true } });
+  const journal = await prisma.journalEntry.findFirst({
+    where: { sourceType: "PAYMENT", sourceId: id },
+    include: { lines: true },
+  });
   await prisma.$transaction(async (tx) => {
     await tx.journalEntry.updateMany({ where: { sourceType: "PAYMENT", sourceId: id, deletedAt: null }, data: { deletedAt: new Date() } });
     await tx.cashTransaction.updateMany({ where: { paymentId: id, deletedAt: null }, data: { deletedAt: new Date() } });
     await tx.payment.update({ where: { id }, data: { deletedAt: new Date() } });
     await recalculateInvoiceStatus(tx, payment.invoiceId);
   });
+  const after = await prisma.payment.findUniqueOrThrow({ where: { id }, include: { cashEntry: true } });
+  const journalAfter = await prisma.journalEntry.findFirst({
+    where: { sourceType: "PAYMENT", sourceId: id },
+    include: { lines: true },
+  });
+  await logActivity(currentUser, "DELETE", "Payment", id, {
+    payment,
+    journal,
+  }, {
+    payment: after,
+    journal: journalAfter,
+  });
   redirectWithNotice("/transaksi/pembayaran", "Pembayaran dan pencatatan kas terkait berhasil dihapus.");
 }
 
+export async function deletePaymentReceipt(formData: FormData) {
+  const currentUser = await assertPermission(PermissionKey.PAYMENT_MANAGE);
+  const id = getText(formData, "id");
+  const payment = await prisma.payment.findUniqueOrThrow({ where: { id } });
+  const payments = await prisma.payment.findMany({
+    where: payment.receiptNo
+      ? { receiptNo: payment.receiptNo, deletedAt: null }
+      : { id, deletedAt: null },
+    include: { cashEntry: true },
+  });
+  const journals = await prisma.journalEntry.findMany({
+    where: { sourceType: "PAYMENT", sourceId: { in: payments.map((item) => item.id) } },
+    include: { lines: true },
+  });
+  await prisma.$transaction(async (tx) => {
+    for (const item of payments) {
+      await tx.journalEntry.updateMany({ where: { sourceType: "PAYMENT", sourceId: item.id, deletedAt: null }, data: { deletedAt: new Date() } });
+      await tx.cashTransaction.updateMany({ where: { paymentId: item.id, deletedAt: null }, data: { deletedAt: new Date() } });
+      await tx.payment.update({ where: { id: item.id }, data: { deletedAt: new Date() } });
+      await recalculateInvoiceStatus(tx, item.invoiceId);
+    }
+  });
+  const after = await prisma.payment.findMany({
+    where: { id: { in: payments.map((item) => item.id) } },
+    include: { cashEntry: true },
+  });
+  const journalsAfter = await prisma.journalEntry.findMany({
+    where: { sourceType: "PAYMENT", sourceId: { in: payments.map((item) => item.id) } },
+    include: { lines: true },
+  });
+  await logActivity(currentUser, "DELETE", "PaymentReceipt", payment.receiptNo ?? id, {
+    payments,
+    journals,
+  }, {
+    payments: after,
+    journals: journalsAfter,
+  });
+  redirectWithNotice("/transaksi/pembayaran", "Kwitansi dan semua item pembayaran terkait berhasil dihapus.");
+}
+
 export async function updateExpense(formData: FormData) {
-  await assertPermission(PermissionKey.EXPENSE_MANAGE);
+  const currentUser = await assertPermission(PermissionKey.EXPENSE_MANAGE);
   const id = getText(formData, "id");
   const parsed = parseWithNotice(expenseSchema, {
     categoryId: getText(formData, "categoryId"),
@@ -1243,8 +1768,9 @@ export async function updateExpense(formData: FormData) {
     spentAt: getText(formData, "spentAt"),
     vendor: getText(formData, "vendor"),
     note: getText(formData, "note"),
-    createdBy: getText(formData, "createdBy"),
+    createdBy: currentUser.name,
   }, "/transaksi/pengeluaran");
+  await assertExpenseCategoryAccess(currentUser.role, [parsed.categoryId], "/transaksi/pengeluaran");
   await assertActiveAccount(
     parsed.assetAccountId,
     "/transaksi/pengeluaran",
@@ -1263,6 +1789,11 @@ export async function updateExpense(formData: FormData) {
     note,
   } = parsed;
   const expenseData = { categoryId, title, amount, spentAt, vendor, note };
+  const before = await prisma.expense.findUniqueOrThrow({ where: { id }, include: { cashEntry: true } });
+  const journalBefore = await prisma.journalEntry.findFirst({
+    where: { sourceType: "EXPENSE", sourceId: id },
+    include: { lines: true },
+  });
   await prisma.$transaction(async (tx) => {
     await tx.expense.update({
       where: { id },
@@ -1299,18 +1830,222 @@ export async function updateExpense(formData: FormData) {
       await tx.journalEntry.update({ where: { id: journal.id }, data: { date: parsed.spentAt } });
     }
   });
+  const after = await prisma.expense.findUniqueOrThrow({ where: { id }, include: { cashEntry: true } });
+  const journalAfter = await prisma.journalEntry.findFirst({
+    where: { sourceType: "EXPENSE", sourceId: id },
+    include: { lines: true },
+  });
+  await logActivity(currentUser, "UPDATE", "Expense", id, {
+    expense: before,
+    journal: journalBefore,
+  }, {
+    expense: after,
+    journal: journalAfter,
+  });
   redirectWithNotice("/transaksi/pengeluaran", "Pengeluaran berhasil diubah.");
 }
 
 export async function deleteExpense(formData: FormData) {
-  await assertPermission(PermissionKey.EXPENSE_MANAGE);
+  const currentUser = await assertPermission(PermissionKey.EXPENSE_MANAGE);
   const id = getText(formData, "id");
+  const expense = await prisma.expense.findUniqueOrThrow({ where: { id }, include: { cashEntry: true } });
+  const journal = await prisma.journalEntry.findFirst({
+    where: { sourceType: "EXPENSE", sourceId: id },
+    include: { lines: true },
+  });
+  if (expense.categoryId) {
+    await assertExpenseCategoryAccess(currentUser.role, [expense.categoryId], "/transaksi/pengeluaran");
+  }
   await prisma.$transaction(async (tx) => {
     await tx.journalEntry.updateMany({ where: { sourceType: "EXPENSE", sourceId: id, deletedAt: null }, data: { deletedAt: new Date() } });
     await tx.cashTransaction.updateMany({ where: { expenseId: id, deletedAt: null }, data: { deletedAt: new Date() } });
     await tx.expense.update({ where: { id }, data: { deletedAt: new Date() } });
   });
+  const after = await prisma.expense.findUniqueOrThrow({ where: { id }, include: { cashEntry: true } });
+  const journalAfter = await prisma.journalEntry.findFirst({
+    where: { sourceType: "EXPENSE", sourceId: id },
+    include: { lines: true },
+  });
+  await logActivity(currentUser, "DELETE", "Expense", id, {
+    expense,
+    journal,
+  }, {
+    expense: after,
+    journal: journalAfter,
+  });
   redirectWithNotice("/transaksi/pengeluaran", "Pengeluaran dan pencatatan kas terkait berhasil dihapus.");
+}
+
+export async function updateExpenseReceipt(formData: FormData) {
+  const currentUser = await assertPermission(PermissionKey.EXPENSE_MANAGE);
+  const returnPath = expenseReturnPath(formData);
+  const parsed = parseWithNotice(expenseReceiptUpdateSchema, {
+    ids: getTexts(formData, "id"),
+    categoryIds: getTexts(formData, "categoryId"),
+    titles: getTexts(formData, "title"),
+    amounts: getTexts(formData, "amount"),
+    vendors: formData.getAll("vendor").map((value) => (typeof value === "string" ? value.trim() : "")),
+    notes: formData.getAll("note").map((value) => (typeof value === "string" ? value.trim() : "")),
+    assetAccountId: getText(formData, "assetAccountId"),
+    spentAt: getText(formData, "spentAt"),
+  }, returnPath);
+
+  const expectedLength = parsed.ids.length;
+  if (
+    parsed.categoryIds.length !== expectedLength
+    || parsed.titles.length !== expectedLength
+    || parsed.amounts.length !== expectedLength
+    || parsed.vendors.length !== expectedLength
+    || parsed.notes.length !== expectedLength
+  ) {
+    redirectWithNotice(returnPath, "Jumlah item pengeluaran tidak sesuai.", "error");
+  }
+  await assertExpenseCategoryAccess(currentUser.role, parsed.categoryIds, returnPath);
+
+  await assertActiveAccount(
+    parsed.assetAccountId,
+    returnPath,
+    AccountType.ASET,
+  );
+
+  const currentExpenses = await prisma.expense.findMany({
+    where: { id: { in: parsed.ids }, deletedAt: null },
+  });
+  if (currentExpenses.length !== expectedLength) {
+    redirectWithNotice(returnPath, "Pengeluaran tidak ditemukan.", "error");
+  }
+  const receiptNumbers = new Set(currentExpenses.map((expense) => expense.receiptNo ?? expense.id));
+  if (receiptNumbers.size !== 1) {
+    redirectWithNotice(returnPath, "Item yang diedit bukan berasal dari nota yang sama.", "error");
+  }
+  const journalsBefore = await prisma.journalEntry.findMany({
+    where: { sourceType: "EXPENSE", sourceId: { in: currentExpenses.map((expense) => expense.id) } },
+    include: { lines: true },
+  });
+
+  const categories = await prisma.expenseCategory.findMany({
+    where: {
+      id: { in: [...new Set(parsed.categoryIds)] },
+      active: true,
+      deletedAt: null,
+    },
+  });
+  if (categories.length !== new Set(parsed.categoryIds).size) {
+    redirectWithNotice(returnPath, "Kategori pengeluaran tidak ditemukan atau sudah nonaktif.", "error");
+  }
+  const categoriesById = new Map(categories.map((category) => [category.id, category]));
+  const lineByExpenseId = new Map(parsed.ids.map((id, index) => [id, {
+    categoryId: parsed.categoryIds[index],
+    title: parsed.titles[index],
+    amount: parsed.amounts[index],
+    vendor: parsed.vendors[index],
+    note: parsed.notes[index],
+  }]));
+
+  await prisma.$transaction(async (tx) => {
+    for (const expense of currentExpenses) {
+      const line = lineByExpenseId.get(expense.id)!;
+      const category = categoriesById.get(line.categoryId)!;
+      await tx.expense.update({
+        where: { id: expense.id },
+        data: {
+          categoryId: line.categoryId,
+          categoryNameSnapshot: category.name,
+          title: line.title,
+          amount: line.amount,
+          spentAt: parsed.spentAt,
+          vendor: line.vendor,
+          note: line.note,
+        },
+      });
+      await tx.cashTransaction.updateMany({
+        where: { expenseId: expense.id },
+        data: {
+          amount: line.amount,
+          date: parsed.spentAt,
+          description: `Pengeluaran ${line.title}`,
+          assetAccountId: parsed.assetAccountId,
+          contraAccountId: category.expenseAccountId || null,
+        },
+      });
+      const journal = await tx.journalEntry.findFirst({ where: { sourceType: "EXPENSE", sourceId: expense.id, deletedAt: null } });
+      if (journal) {
+        await tx.journalLine.updateMany({
+          where: { journalEntryId: journal.id, debit: { gt: 0 } },
+          data: {
+            debit: line.amount,
+            ...(category.expenseAccountId ? { accountId: category.expenseAccountId } : {}),
+          },
+        });
+        await tx.journalLine.updateMany({
+          where: { journalEntryId: journal.id, credit: { gt: 0 } },
+          data: { credit: line.amount, accountId: parsed.assetAccountId },
+        });
+        await tx.journalEntry.update({ where: { id: journal.id }, data: { date: parsed.spentAt, description: `Pengeluaran ${line.title}` } });
+      }
+    }
+  });
+  const expensesAfter = await prisma.expense.findMany({
+    where: { id: { in: parsed.ids } },
+    include: { cashEntry: true },
+  });
+  const journalsAfter = await prisma.journalEntry.findMany({
+    where: { sourceType: "EXPENSE", sourceId: { in: currentExpenses.map((expense) => expense.id) } },
+    include: { lines: true },
+  });
+  await logActivity(currentUser, "UPDATE", "ExpenseReceipt", [...receiptNumbers][0], {
+    expenses: currentExpenses,
+    journals: journalsBefore,
+  }, {
+    expenses: expensesAfter,
+    journals: journalsAfter,
+  });
+  redirectWithNotice(returnPath, "Nota pengeluaran berhasil diubah.");
+}
+
+export async function deleteExpenseReceipt(formData: FormData) {
+  const currentUser = await assertPermission(PermissionKey.EXPENSE_MANAGE);
+  const returnPath = expenseReturnPath(formData);
+  const id = getText(formData, "id");
+  const expense = await prisma.expense.findUniqueOrThrow({ where: { id } });
+  const expenses = await prisma.expense.findMany({
+    where: expense.receiptNo
+      ? { receiptNo: expense.receiptNo, deletedAt: null }
+      : { id, deletedAt: null },
+    include: { cashEntry: true },
+  });
+  const journals = await prisma.journalEntry.findMany({
+    where: { sourceType: "EXPENSE", sourceId: { in: expenses.map((item) => item.id) } },
+    include: { lines: true },
+  });
+  await assertExpenseCategoryAccess(
+    currentUser.role,
+    expenses.map((item) => item.categoryId).filter((categoryId): categoryId is string => Boolean(categoryId)),
+    returnPath,
+  );
+  await prisma.$transaction(async (tx) => {
+    for (const item of expenses) {
+      await tx.journalEntry.updateMany({ where: { sourceType: "EXPENSE", sourceId: item.id, deletedAt: null }, data: { deletedAt: new Date() } });
+      await tx.cashTransaction.updateMany({ where: { expenseId: item.id, deletedAt: null }, data: { deletedAt: new Date() } });
+      await tx.expense.update({ where: { id: item.id }, data: { deletedAt: new Date() } });
+    }
+  });
+  const after = await prisma.expense.findMany({
+    where: { id: { in: expenses.map((item) => item.id) } },
+    include: { cashEntry: true },
+  });
+  const journalsAfter = await prisma.journalEntry.findMany({
+    where: { sourceType: "EXPENSE", sourceId: { in: expenses.map((item) => item.id) } },
+    include: { lines: true },
+  });
+  await logActivity(currentUser, "DELETE", "ExpenseReceipt", expense.receiptNo ?? id, {
+    expenses,
+    journals,
+  }, {
+    expenses: after,
+    journals: journalsAfter,
+  });
+  redirectWithNotice(returnPath, "Nota dan semua item pengeluaran terkait berhasil dihapus.");
 }
 
 export async function createCashTransaction(formData: FormData) {
@@ -1330,7 +2065,7 @@ export async function createCashTransaction(formData: FormData) {
     redirectWithNotice("/buku-kas", "Akun lawan wajib dipilih.", "error");
   }
   await assertActiveAccount(contraAccountId, "/buku-kas");
-  await prisma.$transaction(async (tx) => {
+  const created = await prisma.$transaction(async (tx) => {
     const cash = await tx.cashTransaction.create({
       data: { ...parsed, contraAccountId, createdBy: user.name },
     });
@@ -1344,7 +2079,7 @@ export async function createCashTransaction(formData: FormData) {
           { accountId: contraAccountId, debit: parsed.amount, credit: 0 },
           { accountId: cashAccount.id, debit: 0, credit: parsed.amount },
         ];
-    await tx.journalEntry.create({
+    const journal = await tx.journalEntry.create({
       data: {
         number: `JU-${Date.now()}`,
         date: parsed.date,
@@ -1354,13 +2089,16 @@ export async function createCashTransaction(formData: FormData) {
         postedBy: user.name,
         lines: { create: lines },
       },
+      include: { lines: true },
     });
+    return { cash, journal };
   });
+  await logActivity(user, "CREATE", "CashTransaction", created.cash.id, null, created);
   redirectWithNotice("/buku-kas", "Transaksi kas dan jurnal berhasil disimpan.");
 }
 
 export async function updateCashTransaction(formData: FormData) {
-  await assertPermission(PermissionKey.CASHBOOK_MANAGE);
+  const currentUser = await assertPermission(PermissionKey.CASHBOOK_MANAGE);
   const id = getText(formData, "id");
   const parsed = parseWithNotice(cashSchema, {
     type: getText(formData, "type"),
@@ -1373,6 +2111,10 @@ export async function updateCashTransaction(formData: FormData) {
   }, "/buku-kas");
   await assertActiveAccount(parsed.assetAccountId, "/buku-kas", AccountType.ASET);
   const current = await prisma.cashTransaction.findUniqueOrThrow({ where: { id } });
+  const journalBefore = await prisma.journalEntry.findFirst({
+    where: { sourceType: "CASH", sourceId: id },
+    include: { lines: true },
+  });
   if (current.paymentId || current.expenseId) {
     redirectWithNotice("/buku-kas", "Transaksi otomatis harus diubah dari menu sumbernya.", "error");
   }
@@ -1421,13 +2163,29 @@ export async function updateCashTransaction(formData: FormData) {
       await tx.journalEntry.update({ where: { id: journal.id }, data: { date: parsed.date, description: parsed.description } });
     }
   });
+  const after = await prisma.cashTransaction.findUniqueOrThrow({ where: { id } });
+  const journalAfter = await prisma.journalEntry.findFirst({
+    where: { sourceType: "CASH", sourceId: id },
+    include: { lines: true },
+  });
+  await logActivity(currentUser, "UPDATE", "CashTransaction", id, {
+    cash: current,
+    journal: journalBefore,
+  }, {
+    cash: after,
+    journal: journalAfter,
+  });
   redirectWithNotice("/buku-kas", "Transaksi kas berhasil diubah.");
 }
 
 export async function deleteCashTransaction(formData: FormData) {
-  await assertPermission(PermissionKey.CASHBOOK_MANAGE);
+  const currentUser = await assertPermission(PermissionKey.CASHBOOK_MANAGE);
   const id = getText(formData, "id");
   const current = await prisma.cashTransaction.findUniqueOrThrow({ where: { id } });
+  const journalBefore = await prisma.journalEntry.findFirst({
+    where: { sourceType: "CASH", sourceId: id },
+    include: { lines: true },
+  });
   if (current.paymentId || current.expenseId) {
     redirectWithNotice("/buku-kas", "Transaksi otomatis harus dihapus dari menu sumbernya.", "error");
   }
@@ -1435,11 +2193,23 @@ export async function deleteCashTransaction(formData: FormData) {
     await tx.journalEntry.updateMany({ where: { sourceType: "CASH", sourceId: id, deletedAt: null }, data: { deletedAt: new Date() } });
     await tx.cashTransaction.update({ where: { id }, data: { deletedAt: new Date() } });
   });
+  const after = await prisma.cashTransaction.findUniqueOrThrow({ where: { id } });
+  const journalAfter = await prisma.journalEntry.findFirst({
+    where: { sourceType: "CASH", sourceId: id },
+    include: { lines: true },
+  });
+  await logActivity(currentUser, "DELETE", "CashTransaction", id, {
+    cash: current,
+    journal: journalBefore,
+  }, {
+    cash: after,
+    journal: journalAfter,
+  });
   redirectWithNotice("/buku-kas", "Transaksi kas berhasil dihapus.");
 }
 
 export async function createAccount(formData: FormData) {
-  await assertPermission(PermissionKey.ACCOUNTING_MANAGE);
+  const currentUser = await assertPermission(PermissionKey.ACCOUNTING_MANAGE);
   const parsed = parseWithNotice(accountSchema, {
     code: getText(formData, "code"),
     name: getText(formData, "name"),
@@ -1449,19 +2219,21 @@ export async function createAccount(formData: FormData) {
   if (existing && !existing.deletedAt) {
     redirectWithNotice("/akuntansi?sheet=daftar-akun", "Kode akun sudah digunakan.", "error");
   }
+  let saved;
   if (existing) {
-    await prisma.account.update({
+    saved = await prisma.account.update({
       where: { id: existing.id },
       data: { ...parsed, active: true, deletedAt: null },
     });
   } else {
-    await prisma.account.create({ data: parsed });
+    saved = await prisma.account.create({ data: parsed });
   }
+  await logActivity(currentUser, existing ? "RESTORE" : "CREATE", "Account", saved.id, existing, saved);
   redirectWithNotice("/akuntansi?sheet=daftar-akun", "Akun berhasil ditambahkan.");
 }
 
 export async function updateAccount(formData: FormData) {
-  await assertPermission(PermissionKey.ACCOUNTING_MANAGE);
+  const currentUser = await assertPermission(PermissionKey.ACCOUNTING_MANAGE);
   const parsed = parseWithNotice(accountSchema, {
     code: getText(formData, "code"),
     name: getText(formData, "name"),
@@ -1497,15 +2269,16 @@ export async function updateAccount(formData: FormData) {
   if (duplicate) {
     redirectWithNotice("/akuntansi?sheet=daftar-akun", "Kode akun sudah digunakan.", "error");
   }
-  await prisma.account.update({
+  const after = await prisma.account.update({
     where: { id },
     data: { ...parsed, active: nextActive },
   });
+  await logActivity(currentUser, "UPDATE", "Account", id, current, after);
   redirectWithNotice("/akuntansi?sheet=daftar-akun", "Akun berhasil diubah.");
 }
 
 export async function deleteAccount(formData: FormData) {
-  await assertPermission(PermissionKey.ACCOUNTING_MANAGE);
+  const currentUser = await assertPermission(PermissionKey.ACCOUNTING_MANAGE);
   const id = getText(formData, "id");
   const account = await prisma.account.findUniqueOrThrow({
     where: { id },
@@ -1529,13 +2302,14 @@ export async function deleteAccount(formData: FormData) {
       "error",
     );
   }
-  await prisma.account.update({ where: { id }, data: { active: false, deletedAt: new Date() } });
+  const after = await prisma.account.update({ where: { id }, data: { active: false, deletedAt: new Date() } });
+  await logActivity(currentUser, "DELETE", "Account", id, account, after);
   redirectWithNotice("/akuntansi?sheet=daftar-akun", "Akun berhasil dihapus.");
 }
 
 export async function createJournalEntry(formData: FormData) {
   const user = await assertPermission(PermissionKey.ACCOUNTING_MANAGE);
-  if (user.role !== "ADMIN") {
+  if (!["ADMIN", "SUPERADMIN"].includes(user.role)) {
     redirectWithNotice("/akuntansi?sheet=jurnal", "Jurnal penyesuaian manual hanya dapat dibuat oleh administrator.", "error");
   }
   const parsed = parseWithNotice(manualJournalSchema, {
@@ -1558,7 +2332,7 @@ export async function createJournalEntry(formData: FormData) {
     { accountId: creditAccountId, debit: 0, credit: amount },
   ];
   assertBalanced(lines);
-  await prisma.journalEntry.create({
+  const journal = await prisma.journalEntry.create({
     data: {
       number: `JU-${Date.now()}`,
       date: parsed.date,
@@ -1567,23 +2341,26 @@ export async function createJournalEntry(formData: FormData) {
       postedBy: user.name,
       lines: { create: lines },
     },
+    include: { lines: true },
   });
+  await logActivity(user, "CREATE", "JournalEntry", journal.id, null, journal);
   redirectWithNotice("/akuntansi?sheet=jurnal", "Jurnal umum berhasil diposting.");
 }
 
 export async function deleteJournalEntry(formData: FormData) {
-  await assertPermission(PermissionKey.ACCOUNTING_MANAGE);
+  const currentUser = await assertPermission(PermissionKey.ACCOUNTING_MANAGE);
   const id = getText(formData, "id");
-  const journal = await prisma.journalEntry.findUniqueOrThrow({ where: { id } });
+  const journal = await prisma.journalEntry.findUniqueOrThrow({ where: { id }, include: { lines: true } });
   if (journal.sourceType && journal.sourceType !== "MANUAL") {
     redirectWithNotice("/akuntansi", "Jurnal otomatis harus dihapus dari transaksi sumber.", "error");
   }
-  await prisma.journalEntry.update({ where: { id }, data: { deletedAt: new Date() } });
+  const after = await prisma.journalEntry.update({ where: { id }, data: { deletedAt: new Date() }, include: { lines: true } });
+  await logActivity(currentUser, "DELETE", "JournalEntry", id, journal, after);
   redirectWithNotice("/akuntansi", "Jurnal manual berhasil dihapus.");
 }
 
 export async function saveReceiptSetting(formData: FormData) {
-  await assertPermission(PermissionKey.RECEIPT_SETTING);
+  const currentUser = await assertPermission(PermissionKey.RECEIPT_SETTING);
   const parsed = parseWithNotice(receiptSettingSchema, {
     schoolName: getText(formData, "schoolName"),
     schoolAddress: getText(formData, "schoolAddress"),
@@ -1594,7 +2371,8 @@ export async function saveReceiptSetting(formData: FormData) {
     signatureName: getText(formData, "signatureName"),
     signatureTitle: getText(formData, "signatureTitle"),
   }, "/pengaturan/kwitansi");
-  await prisma.receiptSetting.upsert({
+  const before = await prisma.receiptSetting.findUnique({ where: { id: "default" } });
+  const after = await prisma.receiptSetting.upsert({
     where: { id: "default" },
     create: {
       id: "default",
@@ -1602,6 +2380,7 @@ export async function saveReceiptSetting(formData: FormData) {
     },
     update: parsed,
   });
+  await logActivity(currentUser, before ? "UPDATE" : "CREATE", "ReceiptSetting", "default", before, after);
   revalidatePath("/kwitansi/[id]", "page");
   redirectWithNotice("/pengaturan/kwitansi", "Format header dan footer kwitansi berhasil disimpan.");
 }

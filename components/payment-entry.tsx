@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Search, UserRoundCheck } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Search, UserRoundCheck } from "lucide-react";
 import { useMemo, useState } from "react";
 import { recordPayment } from "@/app/actions";
 import { currency } from "@/lib/format";
@@ -32,9 +32,16 @@ export function PaymentEntry({
 }) {
   const [query, setQuery] = useState("");
   const [studentId, setStudentId] = useState("");
-  const [invoiceId, setInvoiceId] = useState("");
+  const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<string[]>([]);
+  const [amounts, setAmounts] = useState<Record<string, number>>({});
   const selectedStudent = students.find((student) => student.id === studentId);
-  const selectedInvoice = selectedStudent?.invoices.find((invoice) => invoice.id === invoiceId);
+  const selectedInvoices = selectedStudent?.invoices.filter((invoice) =>
+    selectedInvoiceIds.includes(invoice.id),
+  ) ?? [];
+  const totalSelected = selectedInvoices.reduce(
+    (sum, invoice) => sum + (amounts[invoice.id] ?? invoice.remaining),
+    0,
+  );
   const results = useMemo(() => {
     const keyword = query.trim().toLocaleLowerCase("id-ID");
     if (!keyword) return students.slice(0, 8);
@@ -44,6 +51,26 @@ export function PaymentEntry({
       ),
     ).slice(0, 8);
   }, [query, students]);
+
+  function selectStudent(nextStudent: PaymentEntryStudent) {
+    const firstInvoice = nextStudent.invoices[0];
+    setStudentId(nextStudent.id);
+    setSelectedInvoiceIds(firstInvoice ? [firstInvoice.id] : []);
+    setAmounts(firstInvoice ? { [firstInvoice.id]: firstInvoice.remaining } : {});
+  }
+
+  function toggleInvoice(invoice: PaymentEntryStudent["invoices"][number]) {
+    setSelectedInvoiceIds((current) => {
+      if (current.includes(invoice.id)) {
+        return current.filter((id) => id !== invoice.id);
+      }
+      return [...current, invoice.id];
+    });
+    setAmounts((current) => ({
+      ...current,
+      [invoice.id]: current[invoice.id] ?? invoice.remaining,
+    }));
+  }
 
   if (!selectedStudent) {
     return (
@@ -65,10 +92,7 @@ export function PaymentEntry({
             <button
               className="student-result"
               key={student.id}
-              onClick={() => {
-                setStudentId(student.id);
-                setInvoiceId(student.invoices[0]?.id ?? "");
-              }}
+              onClick={() => selectStudent(student)}
               type="button"
             >
               <span className="student-result-icon"><UserRoundCheck size={18} /></span>
@@ -99,43 +123,62 @@ export function PaymentEntry({
           className="btn btn-secondary"
           onClick={() => {
             setStudentId("");
-            setInvoiceId("");
+            setSelectedInvoiceIds([]);
+            setAmounts({});
           }}
           type="button"
         >
           <ArrowLeft size={16} /> Ganti Siswa
         </button>
       </div>
-      <label>
-        Tagihan yang Dibayar
-        <select
-          name="invoiceId"
-          onChange={(event) => setInvoiceId(event.target.value)}
-          required
-          value={invoiceId}
-        >
-          {selectedStudent.invoices.map((invoice) => (
-            <option key={invoice.id} value={invoice.id}>
-              {invoice.title} · {invoice.category} · sisa {currency(invoice.remaining)}
-            </option>
-          ))}
-        </select>
-      </label>
-      {selectedInvoice ? (
-        <div className="invoice-selection-summary">
-          <span>Jatuh tempo {selectedInvoice.dueDate}</span>
-          <strong>Sisa {currency(selectedInvoice.remaining)}</strong>
-        </div>
-      ) : null}
+      <div className="batch-lines">
+        {selectedStudent.invoices.map((invoice) => {
+          const selected = selectedInvoiceIds.includes(invoice.id);
+          return (
+            <section className={`batch-line ${selected ? "selected" : ""}`} key={invoice.id}>
+              <div className="batch-line-head">
+                <label className="checkbox-row">
+                  <input
+                    checked={selected}
+                    onChange={() => toggleInvoice(invoice)}
+                    type="checkbox"
+                  />
+                  <span>
+                    <strong>{invoice.title}</strong>
+                    <small>{invoice.category} · tempo {invoice.dueDate} · sisa {currency(invoice.remaining)}</small>
+                  </span>
+                </label>
+                {selected ? <span className="badge green"><CheckCircle2 size={14} /> Dipilih</span> : null}
+              </div>
+              {selected ? (
+                <div className="field-grid">
+                  <input name="invoiceId" type="hidden" value={invoice.id} />
+                  <label>
+                    Nominal Bayar
+                    <MoneyInput
+                      defaultValue={invoice.remaining}
+                      key={invoice.id}
+                      name="amount"
+                      onValueChange={(amount) =>
+                        setAmounts((current) => ({ ...current, [invoice.id]: amount }))
+                      }
+                    />
+                  </label>
+                  <div className="invoice-selection-summary compact">
+                    <span>Maksimal bayar</span>
+                    <strong>{currency(invoice.remaining)}</strong>
+                  </div>
+                </div>
+              ) : null}
+            </section>
+          );
+        })}
+      </div>
+      <div className="invoice-selection-summary">
+        <span>{selectedInvoices.length} tagihan dalam satu kwitansi</span>
+        <strong>Total {currency(totalSelected)}</strong>
+      </div>
       <div className="field-grid">
-        <label>
-          Nominal Bayar
-          <MoneyInput
-            key={selectedInvoice?.id}
-            defaultValue={selectedInvoice?.remaining}
-            name="amount"
-          />
-        </label>
         <label>
           Tanggal
           <input defaultValue={new Date().toISOString().slice(0, 10)} name="paidAt" required type="date" />
@@ -174,7 +217,7 @@ export function PaymentEntry({
       </div>
       <div className="form-actions">
         <ModalCancelButton />
-        <button className="btn btn-save" type="submit">Simpan & Buat Kwitansi</button>
+        <button className="btn btn-save" disabled={!selectedInvoices.length} type="submit">Simpan & Buat Kwitansi</button>
       </div>
     </form>
   );

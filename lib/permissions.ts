@@ -1,4 +1,4 @@
-import { PermissionKey, UserRole } from "@prisma/client";
+import { PermissionKey } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 export const permissionLabels: Record<PermissionKey, string> = {
@@ -21,7 +21,15 @@ export const permissionLabels: Record<PermissionKey, string> = {
   RECEIPT_SETTING: "Mengatur format kwitansi",
 };
 
-export const defaultPermissions: Record<UserRole, PermissionKey[]> = {
+export const defaultRoles = [
+  { code: "SUPERADMIN", name: "Superadmin", description: "Akses audit dan administrasi penuh tersembunyi." },
+  { code: "ADMIN", name: "Administrator", description: "Akses penuh ke seluruh fitur aplikasi." },
+  { code: "BENDAHARA", name: "Bendahara", description: "Mengelola transaksi, kas, dan laporan keuangan." },
+  { code: "KEPALA_SEKOLAH", name: "Kepala Sekolah", description: "Melihat dashboard, pembukuan, dan laporan." },
+];
+
+export const defaultPermissions: Record<string, PermissionKey[]> = {
+  SUPERADMIN: Object.values(PermissionKey),
   ADMIN: Object.values(PermissionKey),
   BENDAHARA: [
     PermissionKey.DASHBOARD_VIEW,
@@ -49,7 +57,36 @@ export const defaultPermissions: Record<UserRole, PermissionKey[]> = {
   ],
 };
 
-export async function getRolePermissions(role: UserRole) {
+export function roleDisplayName(role: string, roles: { code: string; name: string }[] = defaultRoles) {
+  return roles.find((item) => item.code === role)?.name ?? role.replaceAll("_", " ");
+}
+
+export function normalizeRoleCode(value: string) {
+  return value
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+export async function ensureDefaultRoles() {
+  await prisma.$transaction(
+    defaultRoles.map((role) =>
+      prisma.role.upsert({
+        where: { code: role.code },
+        create: role,
+        update: {
+          name: role.name,
+          description: role.description,
+          active: true,
+          deletedAt: null,
+        },
+      }),
+    ),
+  );
+}
+
+export async function getRolePermissions(role: string) {
   const configured = await prisma.rolePermission.findMany({
     where: { role },
     select: { allowed: true, permission: true },
@@ -57,10 +94,28 @@ export async function getRolePermissions(role: UserRole) {
 
   return configured.length
     ? configured.filter((item) => item.allowed).map((item) => item.permission)
-    : defaultPermissions[role];
+    : (defaultPermissions[role] ?? []);
 }
 
-export async function hasPermission(role: UserRole, permission: PermissionKey) {
+export async function hasPermission(role: string, permission: PermissionKey) {
   const permissions = await getRolePermissions(role);
   return permissions.includes(permission);
+}
+
+export async function getAllowedExpenseCategoryIds(role: string) {
+  const configured = await prisma.roleExpenseCategoryPermission.findMany({
+    where: { role },
+    select: { allowed: true, expenseCategoryId: true },
+  });
+
+  if (!configured.length) return null;
+
+  return configured
+    .filter((item) => item.allowed)
+    .map((item) => item.expenseCategoryId);
+}
+
+export async function canAccessExpenseCategory(role: string, categoryId: string) {
+  const allowedCategoryIds = await getAllowedExpenseCategoryIds(role);
+  return allowedCategoryIds === null || allowedCategoryIds.includes(categoryId);
 }
