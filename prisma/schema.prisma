@@ -145,7 +145,7 @@ model ClassRoom {
 
 model PaymentCategory {
   id               String         @id @default(uuid())
-  code             String
+  code             String         @unique
   name             String
   defaultAmount    Int            @default(0)
   description      String?

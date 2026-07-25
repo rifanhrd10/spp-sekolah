@@ -26,6 +26,10 @@ function toPaymentType(code: string): PaymentType {
   return PaymentType.LAINNYA;
 }
 
+function isUniqueConstraintError(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
+
 const loginSchema = z.object({
   email: z.string().min(1),
   password: z.string().min(6),
@@ -510,8 +514,30 @@ export async function createPaymentCategory(formData: FormData) {
     active: true,
     deletedAt: null,
   };
-  const saved = await prisma.paymentCategory.create({ data });
-  await logActivity(currentUser, "CREATE", "PaymentCategory", saved.id, null, saved);
+  const existing = await prisma.paymentCategory.findUnique({ where: { code: parsed.code } });
+  if (existing && !existing.deletedAt) {
+    redirectWithNotice(
+      "/master/jenis-pembayaran",
+      "Kode jenis pembayaran sudah digunakan.",
+      "error",
+    );
+  }
+
+  try {
+    const saved = existing
+      ? await prisma.paymentCategory.update({ where: { id: existing.id }, data })
+      : await prisma.paymentCategory.create({ data });
+    await logActivity(currentUser, existing ? "RESTORE" : "CREATE", "PaymentCategory", saved.id, existing, saved);
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      redirectWithNotice(
+        "/master/jenis-pembayaran",
+        "Kode jenis pembayaran sudah digunakan.",
+        "error",
+      );
+    }
+    throw error;
+  }
 
   revalidatePath("/master/jenis-pembayaran");
   revalidatePath("/transaksi/tagihan");
@@ -1088,10 +1114,33 @@ export async function updatePaymentCategory(formData: FormData) {
     AccountType.PENDAPATAN,
   );
   const before = await prisma.paymentCategory.findUniqueOrThrow({ where: { id } });
-  const after = await prisma.paymentCategory.update({
-    where: { id },
-    data: { ...parsed, revenueAccountId: parsed.revenueAccountId || null },
+  const duplicate = await prisma.paymentCategory.findFirst({
+    where: { code: parsed.code, deletedAt: null, NOT: { id } },
+    select: { id: true },
   });
+  if (duplicate) {
+    redirectWithNotice(
+      "/master/jenis-pembayaran",
+      "Kode jenis pembayaran sudah digunakan.",
+      "error",
+    );
+  }
+  let after;
+  try {
+    after = await prisma.paymentCategory.update({
+      where: { id },
+      data: { ...parsed, revenueAccountId: parsed.revenueAccountId || null },
+    });
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      redirectWithNotice(
+        "/master/jenis-pembayaran",
+        "Kode jenis pembayaran sudah digunakan.",
+        "error",
+      );
+    }
+    throw error;
+  }
   await logActivity(currentUser, "UPDATE", "PaymentCategory", id, before, after);
   redirectWithNotice("/master/jenis-pembayaran", "Jenis pembayaran berhasil diubah.");
 }
