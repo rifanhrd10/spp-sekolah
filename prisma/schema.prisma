@@ -401,7 +401,7 @@ model JournalLine {
 
 model ReceiptSetting {
   id             String   @id @default("default")
-  schoolName     String   @default("SMP Nusantara")
+  schoolName     String   @default("SMP Muhammadiyah Program Khusus Temanggung")
   schoolAddress  String   @default("Alamat sekolah belum diatur")
   schoolPhone    String?
   headerText     String?  @default("BUKTI PEMBAYARAN")

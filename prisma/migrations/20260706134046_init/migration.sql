@@ -267,7 +267,7 @@ CREATE TABLE "JournalLine" (
 -- CreateTable
 CREATE TABLE "ReceiptSetting" (
     "id" TEXT NOT NULL DEFAULT 'default',
-    "schoolName" TEXT NOT NULL DEFAULT 'SMP Nusantara',
+    "schoolName" TEXT NOT NULL DEFAULT 'SMP Muhammadiyah Program Khusus Temanggung',
     "schoolAddress" TEXT NOT NULL DEFAULT 'Alamat sekolah belum diatur',
     "schoolPhone" TEXT,
     "headerText" TEXT DEFAULT 'BUKTI PEMBAYARAN',

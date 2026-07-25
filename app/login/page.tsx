@@ -43,7 +43,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Search
               <span className="auth-kicker">Portal Keuangan Sekolah</span>
               <h2>Kelola tagihan, pembayaran, dan laporan dalam satu sistem terpadu.</h2>
               <p>Data rapi, proses cepat, dan informasi keuangan mudah dipantau oleh pihak sekolah.</p>
-              <small className="auth-footer-copy">&copy; 2026 SMP Nusantara</small>
+              <small className="auth-footer-copy">&copy; 2026 SMP Muhammadiyah Program Khusus Temanggung</small>
             </div>
           </div>
         </div>
@@ -91,7 +91,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Search
               <span>Bendahara: bendahara@smp.local / bendahara123</span>
               <span>Kepala Sekolah: kepala@smp.local / kepala123</span>
             </details>
-            <div className="auth-panel-footer">&copy; 2026 SMP Nusantara</div>
+            <div className="auth-panel-footer">&copy; 2026 SMP Muhammadiyah Program Khusus Temanggung</div>
           </div>
         </section>
       </section>

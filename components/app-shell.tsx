@@ -388,7 +388,7 @@ export function AppShell({ children, expenseCategories, user, permissions }: App
         />
 
         <footer className="sidebar-credit">
-          <strong>SMP Nusantara</strong>
+          <strong>SMP Muhammadiyah Program Khusus Temanggung</strong>
           <span>&copy; 2026 Sistem Keuangan Sekolah</span>
         </footer>
       </aside>

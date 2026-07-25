@@ -53,7 +53,7 @@ async function main() {
 
   await prisma.receiptSetting.create({
     data: {
-      schoolName: "SMP Nusantara",
+      schoolName: "SMP Muhammadiyah Program Khusus Temanggung",
       schoolAddress: "Jl. Pendidikan No. 10, Indonesia",
       schoolPhone: "(021) 555-0123",
       headerText: "KWITANSI PEMBAYARAN",
