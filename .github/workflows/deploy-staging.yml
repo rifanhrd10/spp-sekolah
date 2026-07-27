@@ -1,0 +1,45 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches:
+      - staging
+
+jobs:
+  deploy:
+    name: Deploy to Server
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: 22
+          script: |
+            set -e
+
+            cd /www/wwwroot/spp-sekolah
+
+            echo "==> Pulling latest code from staging..."
+            git fetch origin
+            git checkout staging
+            git pull origin staging
+
+            echo "==> Installing dependencies..."
+            npm ci --prefer-offline
+
+            echo "==> Running Prisma migrations..."
+            npx prisma migrate deploy
+
+            echo "==> Building app..."
+            npm run build
+
+            echo "==> Restarting PM2..."
+            pm2 reload spp-sekolah --update-env
+
+            echo "==> Done!"
+            pm2 show spp-sekolah
