@@ -68,10 +68,9 @@ export default async function LoginPage({ searchParams }: { searchParams: Search
 
             <form action={loginAction} className="form-grid">
               <label className="field">
-                <span>Username / Email</span>
+                <span>Username</span>
                 <input
                   autoComplete="username"
-                  defaultValue="admin@smp.local"
                   name="email"
                   placeholder="Masukkan username atau email"
                   required
@@ -80,7 +79,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Search
               </label>
               <label className="field">
                 <span>Password</span>
-                <PasswordInput defaultValue="admin123" />
+                <PasswordInput />
               </label>
               <button className="primary-button login-button" type="submit">
                 <LockKeyhole size={18} />
@@ -88,12 +87,6 @@ export default async function LoginPage({ searchParams }: { searchParams: Search
               </button>
             </form>
 
-            <details className="demo-account">
-              <summary>Akun demo lokal</summary>
-              <span>Admin: admin@smp.local / admin123</span>
-              <span>Bendahara: bendahara@smp.local / bendahara123</span>
-              <span>Kepala Sekolah: kepala@smp.local / kepala123</span>
-            </details>
             <div className="auth-panel-footer">
               <span>&copy; 2026 SMP Muhammadiyah Program Khusus Temanggung</span>
               <span>Dibuat oleh Sora Software</span>

@@ -1,5 +1,8 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { extname, join } from "node:path";
 import {
   AccountType,
   CashType,
@@ -232,10 +235,18 @@ const receiptSettingSchema = z.object({
   schoolPhone: z.string().optional(),
   headerText: z.string().optional(),
   footerText: z.string().optional(),
-  logoUrl: z.string().optional(),
   signatureName: z.string().optional(),
   signatureTitle: z.string().optional(),
 });
+
+const receiptLogoMaxSize = 2 * 1024 * 1024;
+const receiptLogoMimeTypes = new Map([
+  ["image/png", ".png"],
+  ["image/jpeg", ".jpg"],
+  ["image/webp", ".webp"],
+]);
+const receiptLogoUploadPath = "/uploads/kwitansi";
+const receiptLogoUploadDir = join(process.cwd(), "public", "uploads", "kwitansi");
 
 function getText(formData: FormData, key: string) {
   const value = formData.get(key);
@@ -246,6 +257,39 @@ function getTexts(formData: FormData, key: string) {
   return formData
     .getAll(key)
     .map((value) => (typeof value === "string" ? value.trim() : ""));
+}
+
+function getFile(formData: FormData, key: string) {
+  const value = formData.get(key);
+  return value instanceof File && value.size > 0 ? value : null;
+}
+
+async function saveReceiptLogo(file: File) {
+  const mimeExtension = receiptLogoMimeTypes.get(file.type);
+  const nameExtension = extname(file.name).toLowerCase();
+  const extension = mimeExtension ?? ([".png", ".jpg", ".jpeg", ".webp"].includes(nameExtension) ? nameExtension : "");
+
+  if (!extension) {
+    redirectWithNotice("/pengaturan/kwitansi", "Logo harus berupa file PNG, JPG, atau WEBP.", "error");
+  }
+
+  if (file.size > receiptLogoMaxSize) {
+    redirectWithNotice("/pengaturan/kwitansi", "Ukuran logo maksimal 2 MB.", "error");
+  }
+
+  await mkdir(receiptLogoUploadDir, { recursive: true });
+  const filename = `logo-${randomUUID()}${extension === ".jpeg" ? ".jpg" : extension}`;
+  await writeFile(join(receiptLogoUploadDir, filename), Buffer.from(await file.arrayBuffer()));
+  return `${receiptLogoUploadPath}/${filename}`;
+}
+
+async function deleteReceiptLogo(logoUrl: string | null | undefined) {
+  if (!logoUrl?.startsWith(`${receiptLogoUploadPath}/`)) return;
+  try {
+    await unlink(join(process.cwd(), "public", logoUrl));
+  } catch {
+    // File may already be gone; the database state is still authoritative.
+  }
 }
 
 function redirectWithNotice(path: string, message: string, type: "success" | "error" = "success"): never {
@@ -2405,26 +2449,40 @@ export async function deleteJournalEntry(formData: FormData) {
 
 export async function saveReceiptSetting(formData: FormData) {
   const currentUser = await assertPermission(PermissionKey.RECEIPT_SETTING);
+  const before = await prisma.receiptSetting.findUnique({ where: { id: "default" } });
+  const uploadedLogo = getFile(formData, "logoFile");
+  const removeLogo = getText(formData, "removeLogo") === "on";
+  const logoUrl = uploadedLogo
+    ? await saveReceiptLogo(uploadedLogo)
+    : removeLogo
+      ? null
+      : before?.logoUrl ?? null;
   const parsed = parseWithNotice(receiptSettingSchema, {
     schoolName: getText(formData, "schoolName"),
     schoolAddress: getText(formData, "schoolAddress"),
     schoolPhone: getText(formData, "schoolPhone"),
     headerText: getText(formData, "headerText"),
     footerText: getText(formData, "footerText"),
-    logoUrl: getText(formData, "logoUrl"),
     signatureName: getText(formData, "signatureName"),
     signatureTitle: getText(formData, "signatureTitle"),
   }, "/pengaturan/kwitansi");
-  const before = await prisma.receiptSetting.findUnique({ where: { id: "default" } });
   const after = await prisma.receiptSetting.upsert({
     where: { id: "default" },
     create: {
       id: "default",
       ...parsed,
+      logoUrl,
     },
-    update: parsed,
+    update: {
+      ...parsed,
+      logoUrl,
+    },
   });
+  if ((uploadedLogo || removeLogo) && before?.logoUrl && before.logoUrl !== logoUrl) {
+    await deleteReceiptLogo(before.logoUrl);
+  }
   await logActivity(currentUser, before ? "UPDATE" : "CREATE", "ReceiptSetting", "default", before, after);
+  revalidatePath("/pengaturan/kwitansi");
   revalidatePath("/kwitansi/[id]", "page");
   redirectWithNotice("/pengaturan/kwitansi", "Format header dan footer kwitansi berhasil disimpan.");
 }

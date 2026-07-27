@@ -1167,6 +1167,37 @@ textarea,
   transition: border-color 0.16s ease, box-shadow 0.16s ease;
 }
 
+input[type="file"] {
+  padding: 8px 10px;
+}
+
+input[type="checkbox"] {
+  width: auto;
+  min-height: 0;
+  padding: 0;
+}
+
+.check-row,
+.receipt-logo-current {
+  display: flex;
+  align-items: center;
+}
+
+.check-row {
+  width: auto;
+  gap: 8px;
+  color: var(--text);
+}
+
+.receipt-logo-current {
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
 .readonly-field {
   width: 100%;
   min-height: 42px;

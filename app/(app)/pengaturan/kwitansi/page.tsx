@@ -17,7 +17,13 @@ export default async function ReceiptSettingsPage({ searchParams }: { searchPara
         <form action={saveReceiptSetting} className="form-stack">
           <label>Nama Sekolah<input defaultValue={setting?.schoolName} name="schoolName" required /></label>
           <label>Alamat Sekolah<textarea defaultValue={setting?.schoolAddress} name="schoolAddress" required /></label>
-          <div className="field-grid"><label>Telepon<input defaultValue={setting?.schoolPhone ?? ""} name="schoolPhone" /></label><label>URL Logo<input defaultValue={setting?.logoUrl ?? ""} name="logoUrl" placeholder="https://..." /></label></div>
+          <div className="field-grid"><label>Telepon<input defaultValue={setting?.schoolPhone ?? ""} name="schoolPhone" /></label><label>Logo Sekolah<input accept="image/png,image/jpeg,image/webp" name="logoFile" type="file" /></label></div>
+          {setting?.logoUrl ? (
+            <div className="receipt-logo-current">
+              <Image alt="Logo sekolah saat ini" className="size-14 object-contain" height={56} src={setting.logoUrl} unoptimized width={56} />
+              <label className="check-row"><input name="removeLogo" type="checkbox" /> Hapus logo saat disimpan</label>
+            </div>
+          ) : null}
           <label>Header Nota<input defaultValue={setting?.headerText ?? ""} name="headerText" /></label>
           <label>Footer Nota<textarea defaultValue={setting?.footerText ?? ""} name="footerText" /></label>
           <div className="field-grid"><label>Nama Penanda Tangan<input defaultValue={setting?.signatureName ?? ""} name="signatureName" /></label><label>Jabatan<input defaultValue={setting?.signatureTitle ?? ""} name="signatureTitle" /></label></div>
