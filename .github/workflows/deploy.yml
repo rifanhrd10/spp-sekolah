@@ -34,7 +34,17 @@ jobs:
             npm ci --prefer-offline --no-audit --no-fund
 
             echo "==> Running Prisma migrations..."
-            npx prisma migrate deploy
+            migrate_log="$(mktemp)"
+            if ! npx prisma migrate deploy 2>&1 | tee "$migrate_log"; then
+              if grep -q "P3005" "$migrate_log"; then
+                echo "==> Existing database detected without Prisma migration history. Baselining migrations..."
+                npx prisma migrate resolve --applied 20260706134046_init
+                npx prisma migrate resolve --applied 20260725180000_payment_category_code_string
+                npx prisma migrate deploy
+              else
+                exit 1
+              fi
+            fi
 
             echo "==> Building app..."
             npm run build
