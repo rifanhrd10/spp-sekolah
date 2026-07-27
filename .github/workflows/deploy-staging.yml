@@ -24,10 +24,10 @@ jobs:
 
             cd /www/wwwroot/spp-sekolah
 
-            echo "==> Pulling latest code from staging..."
+            echo "==> Pulling latest code from main..."
             git fetch origin
-            git checkout staging
-            git pull origin staging
+            git checkout main
+            git pull origin main
 
             echo "==> Installing dependencies..."
             npm ci --prefer-offline
