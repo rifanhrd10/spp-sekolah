@@ -15,8 +15,8 @@ function jsonPreview(value: unknown) {
 
 export default async function ActivityLogPage({ searchParams }: { searchParams: PageSearchParams }) {
   const user = await requireUser();
-  if (user.role !== "SUPERADMIN") {
-    redirect("/dashboard?notice=Akses log activity hanya untuk superadmin.&noticeType=error");
+  if (!["SUPERADMIN", "ADMIN"].includes(user.role)) {
+    redirect("/dashboard?notice=Akses log activity hanya untuk administrator.&noticeType=error");
   }
 
   const params = await searchParams;
