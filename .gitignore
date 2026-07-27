@@ -7,3 +7,4 @@ dist
 coverage
 *.log
 .deploy-guide
+SERVER-DEPLOYMENT-GUIDE.md
