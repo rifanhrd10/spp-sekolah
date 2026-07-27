@@ -49,7 +49,7 @@ type NavItem = {
   label: string;
   icon: LucideIcon;
   permission?: PermissionKey;
-  superadminOnly?: boolean;
+  adminOnly?: boolean;
 };
 
 type NavGroup = {
@@ -104,7 +104,7 @@ const navGroups: NavGroup[] = [
     items: [
       { href: "/master/pengguna", label: "Pengguna & Akses", icon: BookOpenCheck, permission: PermissionKey.USER_MANAGE },
       { href: "/pengaturan/kwitansi", label: "Pengaturan Kwitansi", icon: Cog, permission: PermissionKey.RECEIPT_SETTING },
-      { href: "/pengaturan/log-activity", label: "Log Activity", icon: History, superadminOnly: true },
+      { href: "/pengaturan/log-activity", label: "Log Activity", icon: History, adminOnly: true },
     ],
   },
 ];
@@ -116,6 +116,7 @@ function isActivePath(pathname: string, href: string) {
 function Navigation({
   expenseCategories,
   isSuperadminUser,
+  isAdminUser,
   permissions,
   pathname,
   onNavigate,
@@ -127,6 +128,7 @@ function Navigation({
 }: {
   expenseCategories: { id: string; name: string }[];
   isSuperadminUser: boolean;
+  isAdminUser: boolean;
   permissions: PermissionKey[];
   pathname: string;
   onNavigate: () => void;
@@ -140,7 +142,7 @@ function Navigation({
   const visibleGroups = navGroups
     .map((group) => ({
       ...group,
-      items: group.items.filter((item) => item.superadminOnly ? isSuperadminUser : item.permission ? permissions.includes(item.permission) : true),
+      items: group.items.filter((item) => item.adminOnly ? isAdminUser : item.permission ? permissions.includes(item.permission) : true),
     }))
     .filter((group) => group.items.length);
 
@@ -377,6 +379,7 @@ export function AppShell({ children, expenseCategories, user, permissions }: App
         <Navigation
           expenseCategories={expenseCategories}
           isSuperadminUser={user.role === "SUPERADMIN"}
+          isAdminUser={user.role === "ADMIN" || user.role === "SUPERADMIN"}
           permissions={permissions}
           pathname={pathname}
           selectedAccountingExpenseCategoryId={selectedAccountingExpenseCategoryId}
