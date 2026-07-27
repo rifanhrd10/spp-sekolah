@@ -33,6 +33,12 @@ jobs:
             npm ci --prefer-offline
 
             echo "==> Running Prisma migrations..."
+            # Baseline migration init jika belum ada di _prisma_migrations
+            MIGRATION_EXISTS=$(npx prisma migrate status 2>&1 | grep "20260706134046_init" | grep -v "Not applied" | wc -l)
+            if [ "$MIGRATION_EXISTS" -eq "0" ]; then
+              echo "==> Baselining init migration..."
+              npx prisma migrate resolve --applied "20260706134046_init"
+            fi
             npx prisma migrate deploy
 
             echo "==> Building app..."
